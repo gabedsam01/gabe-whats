@@ -1,0 +1,2648 @@
+openapi: 3.1.0
+
+info:
+  title: gabe-whats REST API
+  version: 0.2.0-design
+  summary: Gateway pessoal de WhatsApp em Go sobre go.mau.fi/whatsmeow
+  description: |
+    API REST pessoal sobre go.mau.fi/whatsmeow para envio e recebimento de
+    mensagens, mídias, áudio PTT, botões interativos, listas, enquetes, gestão de
+    grupos e integração com agentes via Webhooks, SSE e Servidor MCP.
+
+    ## Convenções de contrato
+
+    - **Sem envelope**: as respostas retornam o objeto ou o array diretamente,
+      nunca envolvidos em {"data": ...}.
+    - **Erros**: RFC 9457 (Problem Details) com Content-Type
+      application/problem+json em todas as operações.
+    - **Autenticação**: header X-API-Key. O mesmo valor também é aceito como
+      Authorization: Bearer <API_KEY>. Endpoints públicos (security: []):
+      /health, /docs, /openapi.json e /openapi.yaml.
+    - **Mídia exposta em resposta**: quando o gateway armazena o arquivo
+      (AutoDownloadMedia), o objeto de mídia carrega download_url temporário +
+      expires_at, servido por GET /api/v1/media/{id} com TTL padrão de 15
+      minutos. Depois do TTL a referência responde 410 Gone; referência
+      desconhecida responde 404 Not Found. O agente deve baixar e persistir o
+      binário no próprio contexto antes do vencimento.
+    - **Limites do WhatsApp** (violação responde 422 com Problem.errors):
+      botões no máximo 3; enquete com 2 a 12 opções; lista com no máximo 10
+      seções e 10 linhas por seção; nome de grupo com no máximo 25 caracteres;
+      verificação de números com até 100 itens; até 1024 participantes por
+      requisição de grupo; até 50 mensagens por recibo de leitura.
+    - **Sem multi-sessão**: não existe session_id nos DTOs; a API opera sobre uma
+      única sessão conectada.
+    - **Webhooks e SSE**: o webhook envia sempre o envelope WebhookInboundEvent;
+      event_type (WebhookEventType) discrimina o conteúdo e os objetos group e
+      session só aparecem nos eventos correspondentes.
+    - **Revogação**: DELETE /api/v1/messages/{id} recebe corpo
+      RevokeMessageRequest (chat_jid).
+
+servers:
+  - url: http://127.0.0.1:8080
+    description: Servidor local padrão (escuta apenas em loopback)
+
+security:
+  - ApiKeyAuth: []
+
+tags:
+  - name: Health
+    description: Disponibilidade do processo.
+  - name: Docs
+    description: Documentação automática OpenAPI 3.1.
+  - name: Session
+    description: Pareamento e estado da sessão whatsmeow.
+  - name: Messages
+    description: Envio, edição, revogação, leitura e histórico recente.
+  - name: Media
+    description: Download temporário de mídias expostas pela API.
+  - name: Groups
+    description: Gestão de grupos, participantes, convite e foto.
+  - name: Contacts
+    description: Verificação de números no WhatsApp.
+  - name: Webhooks & Events
+    description: >-
+      Configuração de webhook e stream SSE de eventos. O webhook envia sempre o
+      envelope WebhookInboundEvent e event_type discrimina o conteúdo.
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      operationId: healthCheck
+      summary: Healthcheck da API
+      description: >-
+        Retorna o estado do processo e se a sessão do WhatsApp está conectada.
+        Endpoint público, não exige chave de API.
+      security: []
+      responses:
+        "200":
+          description: Serviço operacional
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /docs:
+    get:
+      tags: [Docs]
+      operationId: getDocsUI
+      summary: Documentação interativa da API
+      description: >-
+        Serve a interface interativa (Scalar UI / Swagger UI) construída a partir
+        desta especificação. Endpoint público, não exige chave de API.
+      security: []
+      responses:
+        "200":
+          description: Página HTML da documentação interativa
+          content:
+            text/html:
+              schema:
+                $ref: "#/components/schemas/HtmlDocument"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /openapi.json:
+    get:
+      tags: [Docs]
+      operationId: getOpenAPIJSON
+      summary: Especificação OpenAPI 3.1 em JSON
+      description: >-
+        Retorna esta especificação serializada em JSON. Endpoint público, não
+        exige chave de API.
+      security: []
+      responses:
+        "200":
+          description: Documento OpenAPI 3.1 em JSON
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OpenAPISpec"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /openapi.yaml:
+    get:
+      tags: [Docs]
+      operationId: getOpenAPIYAML
+      summary: Especificação OpenAPI 3.1 em YAML
+      description: >-
+        Retorna esta especificação serializada em YAML. Endpoint público, não
+        exige chave de API.
+      security: []
+      responses:
+        "200":
+          description: Documento OpenAPI 3.1 em YAML
+          content:
+            application/yaml:
+              schema:
+                $ref: "#/components/schemas/OpenAPISpec"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/session/status:
+    get:
+      tags: [Session]
+      operationId: sessionStatus
+      summary: Status da sessão do WhatsApp
+      description: >-
+        Retorna o estado atual da conexão whatsmeow, o JID autenticado e os
+        metadados do dispositivo pareado.
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200":
+          description: Estado atual da conexão e JID autenticado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionStatus"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/session/qr:
+    get:
+      tags: [Session]
+      operationId: sessionQRCode
+      summary: Obtém o QR Code atual para pareamento
+      description: >-
+        Retorna o QR Code corrente em texto bruto e em PNG codificado em Base64.
+        Quando não há QR disponível (sessão já autenticada) responde 404.
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200":
+          description: QR Code em texto e PNG Base64
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QRCodeResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/session/pair-code:
+    post:
+      tags: [Session]
+      operationId: sessionPairCode
+      summary: Gera código de pareamento de 8 dígitos por telefone
+      description: >-
+        Solicita ao WhatsApp um código de pareamento de 8 caracteres para o
+        número informado (whatsmeow PairPhone).
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PairCodeRequest"
+      responses:
+        "200":
+          description: Código de pareamento gerado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PairCodeResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/session/reconnect:
+    post:
+      tags: [Session]
+      operationId: sessionReconnect
+      summary: Reconecta o cliente whatsmeow
+      description: >-
+        Força Disconnect + Connect no WebSocket sem deslogar o dispositivo.
+        Retorna o estado da sessão após a tentativa de reconexão.
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200":
+          description: Reconexão solicitada e estado resultante
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionStatus"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/session/logout:
+    post:
+      tags: [Session]
+      operationId: sessionLogout
+      summary: Faz logout e remove o vínculo do dispositivo
+      description: >-
+        Encerra a sessão no WhatsApp (whatsmeow Logout) e limpa o dispositivo
+        pareado. Retorna o estado final da sessão.
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200":
+          description: Sessão encerrada e estado final
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionStatus"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/messages/text:
+    post:
+      tags: [Messages]
+      operationId: sendText
+      summary: Envia mensagem de texto
+      description: >-
+        Envia texto simples com suporte a resposta citada (reply_to_id),
+        menções e simulação de digitação antes do envio.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendTextRequest"
+      responses:
+        "200":
+          description: Mensagem enviada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/messages/media:
+    post:
+      tags: [Messages]
+      operationId: sendMedia
+      summary: Envia imagem, vídeo ou documento
+      description: >-
+        Envia mídia a partir de URL HTTP, caminho local permitido ou Base64,
+        com legenda, nome de arquivo e MIME type opcionais.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendMediaRequest"
+      responses:
+        "200":
+          description: Mídia enviada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/messages/voice:
+    post:
+      tags: [Messages]
+      operationId: sendVoice
+      summary: Envia áudio como nota de voz (PTT)
+      description: >-
+        Envia áudio OGG/Opus como nota de voz gravada (PTT true), a partir de
+        URL, caminho local ou Base64.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendVoiceRequest"
+      responses:
+        "200":
+          description: Áudio PTT enviado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/messages/buttons:
+    post:
+      tags: [Messages]
+      operationId: sendButtons
+      summary: Envia botões interativos (NativeFlow)
+      description: >-
+        Envia InteractiveMessage/NativeFlowMessage com botões quick_reply,
+        cta_url ou cta_copy. O WhatsApp aceita no máximo 3 botões; acima disso a
+        resposta é 422.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendButtonsRequest"
+      responses:
+        "200":
+          description: Mensagem com botões enviada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/messages/list:
+    post:
+      tags: [Messages]
+      operationId: sendList
+      summary: Envia menu de lista selecionável
+      description: >-
+        Envia ListMessage com seções e linhas selecionáveis. Limites do WhatsApp:
+        no máximo 10 seções e 10 linhas por seção; violações respondem 422.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendListRequest"
+      responses:
+        "200":
+          description: Lista enviada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/messages/poll:
+    post:
+      tags: [Messages]
+      operationId: sendPoll
+      summary: Envia enquete interativa nativa
+      description: >-
+        Envia PollCreationMessage (compatível com contas pessoais). A enquete
+        exige de 2 a 12 opções; fora dessa faixa a resposta é 422.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendPollRequest"
+      responses:
+        "200":
+          description: Enquete enviada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/messages/reaction:
+    post:
+      tags: [Messages]
+      operationId: sendReaction
+      summary: Envia ou remove reação emoji
+      description: >-
+        Aplica uma reação emoji a uma mensagem; emoji vazio remove a reação
+        existente.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReactionRequest"
+      responses:
+        "200":
+          description: Reação enviada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/messages/{id}:
+    put:
+      tags: [Messages]
+      operationId: editMessage
+      summary: Edita o texto de uma mensagem enviada
+      description: >-
+        Substitui o texto de uma mensagem já enviada (whatsmeow BuildEdit),
+        identificada pelo chat_jid no corpo.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/MessageId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EditMessageRequest"
+      responses:
+        "200":
+          description: Mensagem editada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+    delete:
+      tags: [Messages]
+      operationId: revokeMessage
+      summary: Revoga uma mensagem para todos
+      description: >-
+        Revoga a mensagem para todos os participantes do chat. O chat de origem
+        é informado no corpo RevokeMessageRequest (chat_jid).
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/MessageId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RevokeMessageRequest"
+      responses:
+        "200":
+          description: Mensagem revogada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/messages/read:
+    post:
+      tags: [Messages]
+      operationId: markRead
+      summary: Marca mensagens como lidas
+      description: >-
+        Envia recibo de leitura (whatsmeow MarkRead) para as mensagens
+        indicadas em um chat ou grupo.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MarkReadRequest"
+      responses:
+        "200":
+          description: Recibo de leitura enviado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AckResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/messages/presence:
+    post:
+      tags: [Messages]
+      operationId: sendPresence
+      summary: Envia indicador de digitando ou gravando
+      description: >-
+        Publica o estado de presença no chat (typing, recording ou paused) via
+        SendChatPresence.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PresenceRequest"
+      responses:
+        "200":
+          description: Presença enviada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AckResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/messages/recent:
+    get:
+      tags: [Messages]
+      operationId: listRecentMessages
+      summary: Lista as mensagens mais recentes
+      description: >-
+        Retorna as mensagens mais recentes conhecidas pela API, da mais nova
+        para a mais antiga, opcionalmente filtradas por chat. O parâmetro limit
+        omitido usa 50; o máximo aceito é 200.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: >-
+            Quantidade máxima de mensagens a retornar; se omitido, usa 50
+            (mínimo 1, máximo 200).
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: chat_jid
+          in: query
+          required: false
+          description: >-
+            Filtra por JID de chat ou grupo; se omitido, retorna as mensagens
+            mais recentes de todos os chats.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Lista de mensagens recentes
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecentMessagesResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/media/{id}:
+    get:
+      tags: [Media]
+      operationId: downloadMedia
+      summary: Baixa uma mídia temporária
+      description: |
+        Entrega o binário associado a uma referência de mídia emitida por outra
+        resposta da API (ex. GroupPhotoResponse e demais respostas que exponham
+        download_url temporário).
+
+        O link é temporário: TTL padrão de 15 minutos, refletido em
+        MediaRef.expires_at. Depois do vencimento a rota responde 410 Gone e o
+        agente precisa obter uma nova referência. Referência desconhecida ou já
+        coletada pelo garbage collector responde 404 Not Found.
+
+        O Content-Type é o MIME type original da mídia e o
+        Content-Disposition sugere o nome do arquivo.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/MediaId"
+      responses:
+        "200":
+          description: Binário da mídia (válido até o expires_at da referência)
+          headers:
+            Cache-Control:
+              description: >-
+                private, max-age=900 (15 minutos) para permitir cache local
+                enquanto a referência for válida.
+              schema:
+                type: string
+            Content-Disposition:
+              description: Nome de arquivo sugerido para persistência local.
+              schema:
+                type: string
+            ETag:
+              description: Validador do conteúdo para revalidação condicional.
+              schema:
+                type: string
+          content:
+            application/octet-stream:
+              schema:
+                $ref: "#/components/schemas/MediaBinary"
+            image/*:
+              schema:
+                $ref: "#/components/schemas/MediaBinary"
+            audio/*:
+              schema:
+                $ref: "#/components/schemas/MediaBinary"
+            video/*:
+              schema:
+                $ref: "#/components/schemas/MediaBinary"
+            application/pdf:
+              schema:
+                $ref: "#/components/schemas/MediaBinary"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "410":
+          $ref: "#/components/responses/MediaExpired"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/groups:
+    get:
+      tags: [Groups]
+      operationId: listGroups
+      summary: Lista todos os grupos participados
+      description: >-
+        Retorna os grupos em que o número conectado participa, com metadados
+        normalizados e contagem total.
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200":
+          description: Lista de grupos
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroupsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+    post:
+      tags: [Groups]
+      operationId: createGroup
+      summary: Cria um novo grupo
+      description: >-
+        Cria um grupo com nome de até 25 caracteres e ao menos um participante.
+        Nome acima de 25 caracteres responde 422.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateGroupRequest"
+      responses:
+        "201":
+          description: Grupo criado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroupInfoResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/groups/{jid}:
+    get:
+      tags: [Groups]
+      operationId: getGroup
+      summary: Obtém detalhes e participantes de um grupo
+      description: >-
+        Retorna metadados, descrição, configurações (announce/locked) e a lista
+        de participantes do grupo.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/GroupJid"
+      responses:
+        "200":
+          description: Informações do grupo
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroupInfoResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+    patch:
+      tags: [Groups]
+      operationId: updateGroupSettings
+      summary: Atualiza nome, descrição, anúncio ou trava
+      description: >-
+        Aplica alterações parciais de metadados do grupo (SetGroupName,
+        SetGroupDescription, SetGroupAnnounce, SetGroupLocked). Nome acima de 25
+        caracteres responde 422.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/GroupJid"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateGroupSettingsRequest"
+      responses:
+        "200":
+          description: Configurações do grupo atualizadas
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroupInfoResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/groups/{jid}/photo:
+    put:
+      tags: [Groups]
+      operationId: setGroupPhoto
+      summary: Atualiza a foto do grupo
+      description: >-
+        Recebe a imagem como multipart/form-data na parte file (binário) e o
+        campo caption opcional. Retorna o JID, o photo_id e a URL temporária de
+        download da nova foto (TTL padrão de 15 minutos).
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/GroupJid"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: "#/components/schemas/SetGroupPhotoRequest"
+      responses:
+        "200":
+          description: Foto do grupo atualizada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroupPhotoResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/groups/{jid}/participants:
+    post:
+      tags: [Groups]
+      operationId: updateGroupParticipants
+      summary: Adiciona, remove, promove ou rebaixa participantes
+      description: >-
+        Aplica a ação add, remove, promote ou demote sobre a lista de números ou
+        JIDs informada e retorna o resultado por participante, com o estado
+        atualizado do grupo quando disponível.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/GroupJid"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateGroupParticipantsRequest"
+      responses:
+        "200":
+          description: Resultado da ação por participante
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpdateGroupParticipantsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/groups/{jid}/invite-link:
+    get:
+      tags: [Groups]
+      operationId: getGroupInviteLink
+      summary: Obtém ou reseta o link de convite
+      description: >-
+        Retorna o link de convite do grupo. Com reset=true, revoga o link atual
+        e gera um novo.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/GroupJid"
+        - name: reset
+          in: query
+          required: false
+          description: Se true, revoga o link atual e gera um novo.
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Link de convite
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InviteLinkResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/groups/join:
+    post:
+      tags: [Groups]
+      operationId: joinGroup
+      summary: Entra em um grupo por link de convite
+      description: >-
+        Entra no grupo a partir do código ou da URL de convite
+        (JoinGroupWithLink) e retorna o JID resultante.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JoinGroupRequest"
+      responses:
+        "200":
+          description: Entrou no grupo
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JoinGroupResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/groups/{jid}/leave:
+    post:
+      tags: [Groups]
+      operationId: leaveGroup
+      summary: Sai de um grupo
+      description: >-
+        Remove o número conectado do grupo informado (LeaveGroup).
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/GroupJid"
+      responses:
+        "200":
+          description: Saiu do grupo
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AckResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/contacts/check:
+    post:
+      tags: [Contacts]
+      operationId: checkNumbers
+      summary: Verifica se números estão no WhatsApp
+      description: >-
+        Consulta IsOnWhatsApp para cada número informado e devolve o JID
+        correspondente quando o número existe.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CheckNumbersRequest"
+      responses:
+        "200":
+          description: Resultado da verificação
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CheckNumbersResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/webhooks:
+    get:
+      tags: [Webhooks & Events]
+      operationId: getWebhookConfig
+      summary: Consulta a configuração do webhook
+      description: >-
+        Retorna a configuração persistida em tabela própria da API (URL, filtros
+        e auto-download de mídia) no formato WebhookConfigResponse. O segredo
+        HMAC nunca é retornado; secret_set indica se existe segredo configurado.
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200":
+          description: Configuração atual do webhook, sem o segredo
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookConfigResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+    put:
+      tags: [Webhooks & Events]
+      operationId: updateWebhookConfig
+      summary: Atualiza URL, secret e filtros do webhook
+      description: >-
+        Persiste a configuração do webhook em tabela própria da API. A operação
+        não é read-only: o corpo substitui a configuração vigente e o retorno é
+        o estado persistido no formato WebhookConfigResponse, sem o segredo.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookConfig"
+      responses:
+        "200":
+          description: Configuração salva, sem o segredo
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookConfigResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/events/stream:
+    get:
+      tags: [Webhooks & Events]
+      operationId: streamEvents
+      summary: Stream SSE em tempo real
+      description: >-
+        Abre um stream Server-Sent Events (text/event-stream). O stream envia
+        sempre o envelope WebhookInboundEvent serializado em JSON no campo data;
+        event_type discrimina o conteúdo e os objetos group/session só aparecem
+        nos eventos correspondentes. A conexão permanece aberta até o cliente
+        desconectar.
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200":
+          description: Stream aberto; cada evento data carrega um WebhookInboundEvent
+          content:
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/WebhookInboundEvent"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: >-
+        Chave definida em GABE_WHATS_API_KEY. O mesmo valor também é aceito no
+        header Authorization como Bearer token.
+
+  parameters:
+    MessageId:
+      name: id
+      in: path
+      required: true
+      description: ID único da mensagem atribuído pelo WhatsApp (ex. 3EB0A1B2C3D4E5F6).
+      schema:
+        type: string
+    GroupJid:
+      name: jid
+      in: path
+      required: true
+      description: JID do grupo no formato 1203630...@g.us.
+      schema:
+        type: string
+        pattern: "^[0-9-]+@g[.]us$"
+    MediaId:
+      name: id
+      in: path
+      required: true
+      description: Identificador interno da mídia (MediaRef.id).
+      schema:
+        type: string
+
+  responses:
+    BadRequest:
+      description: >-
+        Requisição malformada (JSON inválido, multipart inválido ou parâmetro
+        com tipo incorreto).
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Unauthorized:
+      description: >-
+        Chave de API ausente, inválida ou revogada. Não se aplica aos endpoints
+        públicos (security: []).
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    NotFound:
+      description: >-
+        Recurso inexistente (mensagem, grupo, mídia, QR Code indisponível ou
+        webhook não configurado).
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    UnprocessableEntity:
+      description: |
+        Payload sintaticamente válido, porém rejeitado pelas regras de negócio
+        ou pelos limites do WhatsApp. Casos cobertos:
+
+        - botões: no máximo 3;
+        - enquete: de 2 a 12 opções;
+        - lista: no máximo 10 seções e 10 linhas por seção;
+        - nome de grupo: no máximo 25 caracteres;
+        - verificação de números: no máximo 100 itens;
+        - participantes de grupo: no máximo 1024 por requisição;
+        - recibo de leitura: no máximo 50 mensagens.
+
+        O detalhamento por campo vem em Problem.errors.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    InternalServerError:
+      description: >-
+        Falha interna inesperada (whatsmeow, armazenamento ou integração). O
+        Problem.code permite tratamento estável pelo agente.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    MediaExpired:
+      description: >-
+        Referência de mídia expirada: o TTL padrão de 15 minutos foi excedido.
+        Obtenha uma nova referência (MediaRef) pela resposta original.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+
+  schemas:
+    Problem:
+      type: object
+      description: >-
+        Corpo de erro padronizado pela RFC 9457 (Problem Details for HTTP APIs),
+        sempre servido como application/problem+json. Substitui qualquer
+        envelope de erro próprio.
+      properties:
+        type:
+          type: string
+          format: uri
+          default: about:blank
+          description: URI que identifica o tipo do problema.
+        title:
+          type: string
+          description: Resumo curto e legível do tipo do problema.
+        status:
+          type: integer
+          format: int32
+          minimum: 400
+          maximum: 599
+          description: Código de status HTTP desta ocorrência.
+        detail:
+          type: string
+          description: Explicação legível e específica desta ocorrência.
+        instance:
+          type: string
+          format: uri
+          description: URI que referencia a ocorrência, normalmente o caminho da requisição.
+        code:
+          type: string
+          description: >-
+            Código estável legível por máquina (ex. validation_error, not_found,
+            whatsapp_limit_exceeded).
+        errors:
+          type: array
+          description: Detalhes por campo quando o problema é uma falha de validação.
+          items:
+            $ref: "#/components/schemas/ProblemField"
+
+    ProblemField:
+      type: object
+      description: Erro de validação associado a um campo específico da requisição.
+      properties:
+        field:
+          type: string
+          description: Caminho do campo inválido no corpo (ex. buttons, options, name).
+        message:
+          type: string
+          description: Descrição legível do motivo pelo qual o campo é inválido.
+
+    HealthResponse:
+      type: object
+      description: Resposta do healthcheck do daemon.
+      properties:
+        status:
+          type: string
+          description: Estado geral do daemon (ex. ok, degraded).
+        version:
+          type: string
+          description: Versão do binário do daemon da API.
+        uptime_seconds:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Tempo de atividade do processo em segundos.
+
+    SessionStatus:
+      type: object
+      description: >-
+        Estado atual da conexão whatsmeow. Não há multi-sessão: representa a
+        única sessão pareada.
+      properties:
+        connected:
+          type: boolean
+          description: Se o WebSocket com o servidor do WhatsApp está conectado.
+        logged_in:
+          type: boolean
+          description: Se o dispositivo está autenticado e pareado com o número.
+        jid:
+          type: string
+          description: JID do número conectado (ex. 5511999999999@s.whatsapp.net).
+        push_name:
+          type: string
+          description: Nome de exibição (push name) do número conectado.
+        platform:
+          type: string
+          description: Plataforma reportada pelo pareamento (ex. smba, android).
+        uptime_seconds:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Tempo em segundos desde o início da conexão atual.
+
+    QRCodeResponse:
+      type: object
+      description: QR Code de pareamento ou resultado do ciclo de conexão.
+      properties:
+        event:
+          type: string
+          enum: [code, success, timeout]
+          description: >-
+            Evento do canal de QR: code (novo código), success (pareado) ou
+            timeout (código expirado).
+        code:
+          type: string
+          description: Conteúdo bruto do QR Code, útil para exibição em terminal.
+        png_base64:
+          type: string
+          description: Imagem do QR Code em PNG codificada em Base64.
+        expires_at:
+          type: string
+          format: date-time
+          description: >-
+            Instante em que o QR Code expira; ausente nos eventos success e
+            timeout.
+
+    PairCodeRequest:
+      type: object
+      description: Payload para geração de código de pareamento por telefone.
+      required: [phone]
+      properties:
+        phone:
+          type: string
+          description: Número com DDI, apenas dígitos (ex. 5511999999999).
+          examples: ["5511999999999"]
+
+    PairCodeResponse:
+      type: object
+      description: Código de pareamento de 8 dígitos gerado pelo WhatsApp.
+      properties:
+        code:
+          type: string
+          description: Código de 8 caracteres a ser digitado no aplicativo.
+        expires_at:
+          type: string
+          format: date-time
+          description: Instante em que o código expira.
+
+    SendTextRequest:
+      type: object
+      description: Payload para envio de mensagem de texto.
+      required: [to, text]
+      properties:
+        to:
+          type: string
+          description: Número com DDI ou JID completo do destinatário.
+        text:
+          type: string
+          description: Conteúdo textual da mensagem.
+        reply_to_id:
+          type: string
+          description: ID da mensagem original quando for resposta citada.
+        mentions:
+          type: array
+          description: JIDs ou números a mencionar no texto.
+          items:
+            type: string
+        simulate_typing_ms:
+          type: integer
+          minimum: 0
+          description: Tempo em ms simulando o status digitando antes do envio.
+
+    SendMediaRequest:
+      type: object
+      description: Payload para envio de imagem, vídeo ou documento.
+      required: [to, media_type, source]
+      properties:
+        to:
+          type: string
+          description: Número ou JID do destinatário.
+        media_type:
+          type: string
+          enum: [image, video, document]
+          description: Tipo de mídia a enviar.
+        source:
+          type: string
+          description: URL HTTP, caminho local permitido ou string Base64.
+        mime_type:
+          type: string
+          description: MIME type explícito (ex. image/jpeg, application/pdf).
+        filename:
+          type: string
+          description: Nome do arquivo, recomendado para documentos.
+        caption:
+          type: string
+          description: Legenda opcional da mídia.
+        reply_to_id:
+          type: string
+          description: ID da mensagem respondida.
+
+    SendVoiceRequest:
+      type: object
+      description: Payload para envio de nota de voz (PTT).
+      required: [to, source]
+      properties:
+        to:
+          type: string
+          description: Número ou JID do destinatário.
+        source:
+          type: string
+          description: Áudio OGG/Opus via URL, caminho local ou Base64.
+        reply_to_id:
+          type: string
+          description: ID da mensagem respondida.
+
+    ButtonItem:
+      type: object
+      description: Botão interativo NativeFlow.
+      required: [type, label, id]
+      properties:
+        type:
+          type: string
+          enum: [quick_reply, cta_url, cta_copy]
+          description: Tipo do botão interativo.
+        label:
+          type: string
+          description: Texto exibido no botão.
+        id:
+          type: string
+          description: Identificador devolvido no webhook quando clicado.
+        value:
+          type: string
+          description: URL para cta_url ou código a copiar para cta_copy.
+
+    SendButtonsRequest:
+      type: object
+      description: >-
+        InteractiveMessage (NativeFlow) com botões. O WhatsApp aceita no máximo
+        3 botões; acima disso a resposta é 422.
+      required: [to, body, buttons]
+      properties:
+        to:
+          type: string
+          description: Número ou JID do destinatário.
+        header:
+          type: string
+          description: Cabeçalho opcional da mensagem.
+        body:
+          type: string
+          description: Corpo principal da mensagem.
+        footer:
+          type: string
+          description: Rodapé opcional da mensagem.
+        buttons:
+          type: array
+          description: Lista de botões (limite do WhatsApp - máximo 3).
+          minItems: 1
+          maxItems: 3
+          items:
+            $ref: "#/components/schemas/ButtonItem"
+
+    ListRow:
+      type: object
+      description: Opção selecionável dentro de uma seção da lista.
+      required: [row_id, title]
+      properties:
+        row_id:
+          type: string
+          description: ID único da linha devolvido ao selecionar.
+        title:
+          type: string
+          description: Título da opção.
+        description:
+          type: string
+          description: Descrição curta exibida abaixo do título.
+
+    ListSection:
+      type: object
+      description: >-
+        Seção do menu de lista. O WhatsApp aceita no máximo 10 linhas por seção;
+        acima disso a resposta é 422.
+      required: [title, rows]
+      properties:
+        title:
+          type: string
+          description: Título da seção.
+        rows:
+          type: array
+          description: Linhas selecionáveis desta seção (máximo 10).
+          minItems: 1
+          maxItems: 10
+          items:
+            $ref: "#/components/schemas/ListRow"
+
+    SendListRequest:
+      type: object
+      description: >-
+        ListMessage com menu expansível. O WhatsApp aceita no máximo 10 seções e
+        10 linhas por seção; violações respondem 422.
+      required: [to, title, description, button_text, sections]
+      properties:
+        to:
+          type: string
+          description: Número ou JID do destinatário.
+        title:
+          type: string
+          description: Título do menu.
+        description:
+          type: string
+          description: Texto explicativo da mensagem.
+        button_text:
+          type: string
+          description: Rótulo do botão que abre a lista.
+        footer:
+          type: string
+          description: Rodapé opcional.
+        sections:
+          type: array
+          description: Seções do menu (máximo 10).
+          minItems: 1
+          maxItems: 10
+          items:
+            $ref: "#/components/schemas/ListSection"
+
+    SendPollRequest:
+      type: object
+      description: >-
+        PollCreationMessage nativa, compatível com contas pessoais. Exige de 2 a
+        12 opções; fora dessa faixa a resposta é 422.
+      required: [to, question, options]
+      properties:
+        to:
+          type: string
+          description: Número ou JID do destinatário.
+        question:
+          type: string
+          description: Pergunta da enquete.
+        options:
+          type: array
+          description: Opções clicáveis (mínimo 2, máximo 12).
+          minItems: 2
+          maxItems: 12
+          items:
+            type: string
+        max_selections:
+          type: [integer, "null"]
+          default: 1
+          minimum: 0
+          description: >-
+            omitido ou null equivale a 1 (escolha única); 0 significa múltipla
+            escolha.
+
+    ReactionRequest:
+      type: object
+      description: Reação emoji em uma mensagem existente.
+      required: [chat_jid, message_id, emoji]
+      properties:
+        chat_jid:
+          type: string
+          description: JID do chat ou grupo.
+        sender_jid:
+          type: string
+          description: JID do remetente da mensagem alvo (obrigatório em grupos).
+        message_id:
+          type: string
+          description: ID da mensagem que receberá a reação.
+        emoji:
+          type: string
+          description: >-
+            Emoji (ex. 👍) ou string vazia para remover a reação; o campo é
+            obrigatório, mas aceita a string vazia.
+
+    EditMessageRequest:
+      type: object
+      description: Novo texto de uma mensagem já enviada.
+      required: [chat_jid, new_text]
+      properties:
+        chat_jid:
+          type: string
+          description: JID do chat onde a mensagem foi enviada.
+        new_text:
+          type: string
+          description: Novo texto da mensagem.
+
+    RevokeMessageRequest:
+      type: object
+      description: >-
+        Corpo obrigatório do DELETE /api/v1/messages/{id}, informando o chat de
+        origem da mensagem a revogar.
+      required: [chat_jid]
+      properties:
+        chat_jid:
+          type: string
+          description: JID do chat ou grupo que contém a mensagem.
+
+    MarkReadRequest:
+      type: object
+      description: Mensagens a marcar como lidas em um chat.
+      required: [chat_jid, message_ids]
+      properties:
+        chat_jid:
+          type: string
+          description: JID do chat ou grupo.
+        sender_jid:
+          type: string
+          description: >-
+            JID do remetente das mensagens (obrigatório para recibo de leitura
+            em grupos).
+        message_ids:
+          type: array
+          description: >-
+            IDs das mensagens que serão marcadas como lidas; até 50 por
+            requisição.
+          minItems: 1
+          maxItems: 50
+          items:
+            type: string
+        timestamp:
+          type: string
+          format: date-time
+          description: >-
+            Instante de leitura; se omitido, a API usa o horário atual.
+
+    PresenceRequest:
+      type: object
+      description: Estado de presença a publicar no chat.
+      required: [chat_jid, state]
+      properties:
+        chat_jid:
+          type: string
+          description: JID do chat ou grupo.
+        state:
+          type: string
+          enum: [typing, recording, paused]
+          description: Estado de presença a enviar.
+
+    MessageResponse:
+      type: object
+      description: Resposta normalizada após enviar ou alterar uma mensagem.
+      properties:
+        message_id:
+          type: string
+          description: ID único da mensagem gerado ou retornado pelo WhatsApp.
+        chat_jid:
+          type: string
+          description: JID normalizado do chat destinatário.
+        timestamp:
+          type: string
+          format: date-time
+          description: Timestamp confirmado pelo servidor do WhatsApp.
+        status:
+          type: string
+          description: Estado da operação (sent, edited, revoked, reacted).
+
+    MediaRef:
+      type: object
+      description: >-
+        Referência de mídia exposta pela API com URL temporária de download. O
+        agente deve baixar o conteúdo antes de expires_at e guardá-lo no próprio
+        contexto, pois a URL deixa de funcionar após o TTL (padrão de 15
+        minutos).
+      properties:
+        id:
+          type: string
+          description: Identificador interno da mídia, usado em GET /api/v1/media/{id}.
+        mime_type:
+          type: string
+          description: MIME type do conteúdo (ex. image/jpeg, application/pdf).
+        filename:
+          type: string
+          description: Nome de arquivo sugerido para o conteúdo.
+        size_bytes:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Tamanho do conteúdo em bytes.
+        download_url:
+          type: string
+          description: >-
+            URL temporária de download servida por GET /api/v1/media/{id}
+            (relativa ao servidor declarado em servers ou absoluta).
+        expires_at:
+          type: string
+          format: date-time
+          description: Instante em que a URL temporária deixa de ser válida.
+
+    MessageSummary:
+      type: object
+      description: Visão enxuta de uma mensagem entregue no histórico recente.
+      properties:
+        message_id:
+          type: string
+          description: ID único da mensagem.
+        chat_jid:
+          type: string
+          description: JID do chat ou grupo onde a mensagem está.
+        sender_jid:
+          type: string
+          description: JID de quem enviou a mensagem.
+        sender_name:
+          type: string
+          description: Nome de exibição do remetente, quando conhecido.
+        timestamp:
+          type: string
+          format: date-time
+          description: Instante em que a mensagem foi enviada.
+        message_type:
+          type: string
+          description: >-
+            Tipo normalizado (ex. text, image, audio, video, document, sticker,
+            poll, reaction, button_reply, list_reply).
+        text:
+          type: string
+          description: >-
+            Texto extraível da mensagem (corpo, legenda, pergunta da enquete ou
+            opção escolhida).
+        is_group:
+          type: boolean
+          description: Se a mensagem pertence a um grupo.
+
+    RecentMessagesResponse:
+      type: object
+      description: >-
+        Mensagens mais recentes, da mais nova para a mais antiga.
+      properties:
+        messages:
+          type: array
+          description: Mensagens recentes encontradas.
+          items:
+            $ref: "#/components/schemas/MessageSummary"
+
+    CreateGroupRequest:
+      type: object
+      description: >-
+        Payload de criação de grupo. O nome é limitado a 25 caracteres pelo
+        WhatsApp; acima disso a resposta é 422.
+      required: [name, participants]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 25
+          description: Nome do grupo (limite de 25 caracteres imposto pelo WhatsApp).
+        participants:
+          type: array
+          description: >-
+            Números ou JIDs dos participantes iniciais; o WhatsApp aceita até
+            1024 participantes por grupo.
+          minItems: 1
+          maxItems: 1024
+          items:
+            type: string
+
+    UpdateGroupSettingsRequest:
+      type: object
+      description: >-
+        Alterações parciais de metadados e permissões do grupo. Nome acima de 25
+        caracteres responde 422.
+      properties:
+        name:
+          type: string
+          maxLength: 25
+          description: Novo nome do grupo (limite de 25 caracteres).
+        description:
+          type: string
+          description: Nova descrição ou tópico do grupo.
+        announce:
+          type: boolean
+          description: Se true, apenas administradores enviam mensagens.
+        locked:
+          type: boolean
+          description: Se true, apenas administradores editam dados do grupo.
+
+    UpdateGroupParticipantsRequest:
+      type: object
+      description: Mutação de participantes do grupo.
+      required: [action, participants]
+      properties:
+        action:
+          type: string
+          enum: [add, remove, promote, demote]
+          description: Ação a aplicar sobre os participantes.
+        participants:
+          type: array
+          description: Números ou JIDs alvo da ação; até 1024 por requisição.
+          minItems: 1
+          maxItems: 1024
+          items:
+            type: string
+
+    GroupParticipantResult:
+      type: object
+      description: >-
+        Resultado da ação aplicada a um participante. O whatsmeow devolve o
+        desfecho por participante, com erro individual, por isso a resposta não
+        é um único erro para a lista inteira.
+      properties:
+        jid:
+          type: string
+          description: JID do participante alvo da ação.
+        status:
+          type: string
+          enum: [added, removed, promoted, demoted, failed]
+          description: >-
+            Resultado da ação para este participante: added, removed, promoted,
+            demoted ou failed.
+        error_code:
+          type: integer
+          description: >-
+            Código numérico do erro individual do WhatsApp quando o status é
+            failed (ex. 403 proibido, 409 conflito).
+        message:
+          type: string
+          description: Descrição legível do erro individual quando o status é failed.
+
+    UpdateGroupParticipantsResponse:
+      type: object
+      description: >-
+        Resultado da ação participante a participante e, quando disponível, o
+        estado atualizado do grupo.
+      properties:
+        action:
+          type: string
+          enum: [add, remove, promote, demote]
+          description: Ação aplicada aos participantes.
+        results:
+          type: array
+          description: >-
+            Resultado da ação para cada participante, na mesma ordem em que
+            foram enviados.
+          items:
+            $ref: "#/components/schemas/GroupParticipantResult"
+        group:
+          $ref: "#/components/schemas/GroupInfoResponse"
+          description: >-
+            Estado atualizado do grupo; ausente quando a operação não devolve os
+            metadados do grupo.
+
+    GroupParticipantInfo:
+      type: object
+      description: Participante de um grupo com papel normalizado.
+      properties:
+        jid:
+          type: string
+          description: JID do participante.
+        phone_number:
+          type: string
+          description: Número de telefone em formato internacional, quando conhecido.
+        is_admin:
+          type: boolean
+          description: Se o participante é administrador.
+        is_super_admin:
+          type: boolean
+          description: Se o participante é superadministrador (criador).
+
+    GroupInfoResponse:
+      type: object
+      description: Metadados normalizados de um grupo do WhatsApp.
+      properties:
+        jid:
+          type: string
+          description: JID do grupo.
+        name:
+          type: string
+          description: Nome atual do grupo.
+        description:
+          type: string
+          description: Descrição ou tópico do grupo.
+        owner_jid:
+          type: string
+          description: JID do criador do grupo.
+        is_announce:
+          type: boolean
+          description: Se o grupo está em modo somente administradores.
+        is_locked:
+          type: boolean
+          description: Se apenas administradores podem editar dados do grupo.
+        participants:
+          type: array
+          description: Participantes do grupo.
+          items:
+            $ref: "#/components/schemas/GroupParticipantInfo"
+
+    GroupsResponse:
+      type: object
+      description: Lista de grupos participados pelo número conectado.
+      properties:
+        groups:
+          type: array
+          description: Grupos retornados pela API.
+          items:
+            $ref: "#/components/schemas/GroupInfoResponse"
+
+    SetGroupPhotoRequest:
+      type: object
+      description: >-
+        Corpo multipart/form-data de PUT /api/v1/groups/{jid}/photo. O DTO Go em
+        shared/contracts cobre apenas os campos textuais (caption); a parte file
+        com o binário é descrita aqui porque não faz parte da struct.
+      required: [file]
+      properties:
+        file:
+          type: string
+          format: binary
+          description: Conteúdo binário da imagem (JPEG ou PNG).
+        caption:
+          type: string
+          description: Legenda opcional da foto, enviada no campo caption.
+
+    GroupPhotoResponse:
+      type: object
+      description: >-
+        Foto atualizada do grupo e URL temporária de download (TTL padrão de 15
+        minutos).
+      properties:
+        jid:
+          type: string
+          description: JID do grupo atualizado.
+        photo_id:
+          type: string
+          description: ID da foto retornado pelo WhatsApp.
+        download_url:
+          type: string
+          description: URL temporária para baixar a foto via GET /api/v1/media/{id}.
+        expires_at:
+          type: string
+          format: date-time
+          description: Instante em que a URL temporária de download expira.
+
+    InviteLinkResponse:
+      type: object
+      description: Link de convite do grupo.
+      properties:
+        jid:
+          type: string
+          description: JID do grupo.
+        link:
+          type: string
+          description: URL de convite atual do grupo.
+        reset:
+          type: boolean
+          description: >-
+            Se true, o link anterior foi revogado e este é um novo link.
+
+    JoinGroupRequest:
+      type: object
+      description: Entrada em grupo por código ou URL de convite.
+      required: [invite]
+      properties:
+        invite:
+          type: string
+          description: >-
+            Código do convite ou URL completa
+            (ex. https://chat.whatsapp.com/XXXXXXXX).
+
+    JoinGroupResponse:
+      type: object
+      description: Resultado da entrada no grupo.
+      properties:
+        group_jid:
+          type: string
+          description: JID do grupo em que o número entrou.
+
+    CheckNumbersRequest:
+      type: object
+      description: Números a verificar no WhatsApp.
+      required: [phones]
+      properties:
+        phones:
+          type: array
+          description: >-
+            Números com DDI, apenas dígitos, ou JIDs completos (ex.
+            5511999999999); até 100 números por requisição.
+          minItems: 1
+          maxItems: 100
+          items:
+            type: string
+
+    NumberCheckResult:
+      type: object
+      description: Resultado da consulta de um número.
+      properties:
+        query:
+          type: string
+          description: Número exatamente como foi enviado na requisição.
+        jid:
+          type: string
+          description: >-
+            JID resolvido no WhatsApp; vazio quando o número não está
+            registrado.
+        is_registered:
+          type: boolean
+          description: Se o número possui conta ativa no WhatsApp.
+        phone_number:
+          type: string
+          description: Número canônico retornado pelo WhatsApp após a consulta.
+        verified_name:
+          type: string
+          description: Nome verificado da conta comercial, quando existir.
+
+    CheckNumbersResponse:
+      type: object
+      description: Resultado da verificação em lote de números.
+      properties:
+        results:
+          type: array
+          description: >-
+            Resultado da verificação, na mesma ordem dos números enviados.
+          items:
+            $ref: "#/components/schemas/NumberCheckResult"
+
+    AckResponse:
+      type: object
+      description: >-
+        Confirmação de operação sem payload de domínio. É a resposta de
+        POST /api/v1/messages/read, POST /api/v1/messages/presence e
+        POST /api/v1/groups/{jid}/leave.
+      properties:
+        ok:
+          type: boolean
+          description: Se true, a operação foi aplicada com sucesso.
+        detail:
+          type: string
+          description: Detalhe legível opcional sobre a operação aplicada.
+
+    WebhookEventType:
+      type: string
+      description: >-
+        Tipo do evento entregue no envelope WebhookInboundEvent. Discrimina o
+        conteúdo do payload; os objetos group e session só aparecem nos eventos
+        correspondentes.
+      enum:
+        - message.received
+        - group.updated
+        - session.connected
+        - session.disconnected
+        - session.logged_out
+
+    WebhookMessageType:
+      type: string
+      description: >-
+        Tipo normalizado de uma mensagem recebida. O normalizador mapeia o oneof
+        do protobuf para este vocabulário e usa unknown quando o tipo não tem
+        representação dedicada.
+      enum:
+        - text
+        - image
+        - audio
+        - video
+        - document
+        - sticker
+        - location
+        - contact
+        - button_reply
+        - list_reply
+        - poll
+        - poll_vote
+        - reaction
+        - revoke
+        - unknown
+
+    WebhookConfig:
+      type: object
+      description: >-
+        Corpo do PUT /api/v1/webhooks. Nenhum campo é declarado required: o
+        objeto enviado substitui a configuração vigente. O secret é write-only e
+        nunca é retornado; as respostas usam WebhookConfigResponse.
+      properties:
+        url:
+          type: string
+          description: URL HTTP de destino do agente.
+        secret:
+          type: string
+          description: >-
+            Segredo opcional para assinatura HMAC-SHA256 no header
+            X-GabeWhats-Signature com valor sha256=<hex>. Write-only: nunca é
+            retornado em resposta alguma.
+        ignore_from_me:
+          type: boolean
+          description: >-
+            Se true, ignora mensagens enviadas pelo próprio número para evitar
+            loops.
+        allow_jids:
+          type: array
+          description: Allowlist opcional de chats ou números que acionam o agente.
+          items:
+            type: string
+        auto_download_media:
+          type: boolean
+          description: Se true, baixa e descriptografa mídias automaticamente.
+        include_base64:
+          type: boolean
+          description: Se true, inclui o conteúdo da mídia em Base64 no payload.
+
+    WebhookConfigResponse:
+      type: object
+      description: >-
+        Configuração do webhook devolvida pelo GET /api/v1/webhooks e pelo PUT
+        /api/v1/webhooks, sem o segredo. O campo secret do WebhookConfig nunca é
+        retornado; secret_set indica se existe segredo configurado.
+      properties:
+        url:
+          type: string
+          description: URL HTTP de destino do agente.
+        ignore_from_me:
+          type: boolean
+          description: >-
+            Se true, ignora mensagens enviadas pelo próprio número para evitar
+            loops.
+        allow_jids:
+          type: array
+          description: Allowlist opcional de chats ou números que acionam o agente.
+          items:
+            type: string
+        auto_download_media:
+          type: boolean
+          description: Se true, baixa e descriptografa mídias automaticamente.
+        include_base64:
+          type: boolean
+          description: Se true, inclui o conteúdo da mídia em Base64 no payload.
+        secret_set:
+          type: boolean
+          description: >-
+            Indica se já existe segredo HMAC configurado, sem revelá-lo.
+
+    WebhookButtonReply:
+      type: object
+      description: Clique de botão ou linha de lista normalizado para agentes.
+      properties:
+        selected_id:
+          type: string
+          description: ID do botão ou da linha selecionada.
+        selected_text:
+          type: string
+          description: Texto exibido na opção selecionada.
+        response_json:
+          type: [string, "null"]
+          description: >-
+            JSON de parâmetros de um clique NativeFlow, recebido do upstream em
+            InteractiveResponseMessage.ParamsJSON; ausente ou null quando o
+            clique não é NativeFlow.
+
+    WebhookPollVote:
+      type: object
+      description: >-
+        Voto de enquete normalizado. Os hashes SHA-256 vêm sempre do upstream; os
+        textos (question e selected_options) só são preenchidos quando a criação
+        da enquete está no cache SHA-256 -> texto mantido pela API.
+      properties:
+        poll_message_id:
+          type: string
+          description: ID da mensagem de enquete votada.
+        question:
+          type: string
+          description: >-
+            Pergunta original da enquete. Ausente ou vazia quando o cache não
+            possui a criação da enquete.
+        selected_options:
+          type: array
+          description: >-
+            Textos das opções selecionadas. Ausente ou vazio quando o cache não
+            possui a criação da enquete; votos de remoção também chegam com
+            selected_options vazio.
+          items:
+            type: string
+        selected_hashes:
+          type: array
+          description: >-
+            Hashes SHA-256 hexadecimais das opções selecionadas. Sempre
+            presente, inclusive em votos de remoção, e é o fallback quando o
+            cache não possui a criação.
+          items:
+            type: string
+        voter_jid:
+          type: string
+          description: JID de quem votou na enquete.
+        poll_sender_jid:
+          type: [string, "null"]
+          description: >-
+            JID de quem criou a enquete, quando disponível; ausente ou null
+            quando o upstream não informa o criador.
+
+    WebhookMediaPayload:
+      type: object
+      description: >-
+        Metadados e referências ao conteúdo de uma mídia recebida. Sem
+        AutoDownloadMedia o objeto carrega apenas metadados; download_url e
+        expires_at só aparecem quando o gateway armazenou o arquivo.
+      properties:
+        media_id:
+          type: string
+          description: >-
+            ID para solicitar novamente a mídia em GET /api/v1/media/{id},
+            inclusive após a URL temporária responder 410 Gone.
+        mime_type:
+          type: string
+          description: MIME type da mídia.
+        filename:
+          type: string
+          description: Nome do arquivo, quando disponível.
+        is_ptt:
+          type: boolean
+          description: Se a mídia é uma nota de voz (push-to-talk).
+        file_size:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Tamanho do arquivo em bytes.
+        width:
+          type: integer
+          minimum: 0
+          description: Largura da mídia em pixels, quando disponível.
+        height:
+          type: integer
+          minimum: 0
+          description: Altura da mídia em pixels, quando disponível.
+        seconds:
+          type: integer
+          minimum: 0
+          description: Duração da mídia em segundos, quando disponível.
+        caption:
+          type: string
+          description: Legenda da mídia, quando disponível.
+        is_animated:
+          type: boolean
+          description: Indica se a mídia é animada (ex. sticker animado).
+        download_url:
+          type: string
+          description: >-
+            URL temporária para baixar a mídia; presente somente quando o
+            gateway armazenou o arquivo (AutoDownloadMedia), com TTL padrão de
+            15 minutos.
+        expires_at:
+          type: [string, "null"]
+          format: date-time
+          description: >-
+            Expiração da URL temporária; presente somente quando o gateway
+            armazenou o arquivo (AutoDownloadMedia), ausente ou null caso
+            contrário.
+        local_path:
+          type: string
+          description: Caminho local do arquivo baixado.
+        base64:
+          type: string
+          description: Conteúdo da mídia em Base64, quando habilitado.
+
+    WebhookReaction:
+      type: object
+      description: >-
+        Reação a uma mensagem. O upstream entrega ReactionMessage com a Key da
+        mensagem-alvo; o emoji é obtido via DecryptReaction.
+      properties:
+        emoji:
+          type: string
+          description: Emoji da reação; string vazia indica remoção da reação.
+        target_message_id:
+          type: string
+          description: ID da mensagem que recebeu a reação.
+        target_sender_jid:
+          type: string
+          description: JID do remetente da mensagem que recebeu a reação.
+        by_me:
+          type: boolean
+          description: Indica se a reação foi enviada pelo próprio número.
+
+    WebhookRevoke:
+      type: object
+      description: >-
+        Mensagem revogada. O whatsmeow entrega a revogação como ProtocolMessage
+        REVOKE, sem unwrap; o normalizador traduz para message_type revoke.
+      properties:
+        target_message_id:
+          type: string
+          description: ID da mensagem revogada.
+        target_sender_jid:
+          type: string
+          description: JID do remetente da mensagem revogada.
+
+    WebhookPollCreation:
+      type: object
+      description: >-
+        Criação de enquete recebida. Este evento ancora o cache SHA-256 -> texto
+        mantido pela API; toda enquete recebida deve ser cacheada para que os
+        votos seguintes carreguem question e selected_options em texto.
+      properties:
+        poll_message_id:
+          type: string
+          description: ID da mensagem que contém a enquete.
+        question:
+          type: string
+          description: Pergunta legível da enquete.
+        options:
+          type: array
+          description: Textos das opções legíveis da enquete.
+          items:
+            type: string
+        selectable_option_count:
+          type: integer
+          minimum: 0
+          description: Quantidade de opções que podem ser selecionadas por voto.
+        poll_sender_jid:
+          type: string
+          description: JID de quem criou a enquete.
+
+    WebhookInboundEvent:
+      type: object
+      description: >-
+        Envelope único entregue por webhook HTTP POST e pelo stream SSE. O
+        webhook envia sempre este envelope; event_type discrimina o conteúdo e
+        os objetos group e session só aparecem nos eventos correspondentes.
+      properties:
+        event_id:
+          type: string
+          description: Identificador único deste evento.
+        event_type:
+          $ref: "#/components/schemas/WebhookEventType"
+        timestamp:
+          type: string
+          format: date-time
+          description: Data e hora em que o evento ocorreu.
+        chat_jid:
+          type: string
+          description: JID do chat relacionado ao evento.
+        sender_jid:
+          type: string
+          description: JID de quem enviou a mensagem.
+        sender_name:
+          type: string
+          description: Nome de exibição de quem enviou a mensagem.
+        server_id:
+          type: string
+          description: Identificador da mensagem atribuído pelo servidor do WhatsApp.
+        verified_name:
+          type: string
+          description: Nome comercial verificado associado ao remetente.
+        is_group:
+          type: boolean
+          description: Indica se a mensagem foi recebida em um grupo.
+        is_from_me:
+          type: boolean
+          description: Indica se a mensagem foi enviada pelo próprio número.
+        message_id:
+          type: string
+          description: Identificador da mensagem.
+        message_type:
+          $ref: "#/components/schemas/WebhookMessageType"
+        text:
+          type: string
+          description: Texto da mensagem, quando disponível.
+        is_edit:
+          type: boolean
+          description: Indica se o evento corresponde a uma edição de mensagem.
+        edited_text:
+          type: string
+          description: Texto atualizado da mensagem editada.
+        reply_to_id:
+          type: string
+          description: Identificador da mensagem respondida.
+        button_reply:
+          $ref: "#/components/schemas/WebhookButtonReply"
+        poll_vote:
+          $ref: "#/components/schemas/WebhookPollVote"
+        media:
+          $ref: "#/components/schemas/WebhookMediaPayload"
+        reaction:
+          oneOf:
+            - $ref: "#/components/schemas/WebhookReaction"
+            - type: "null"
+          description: >-
+            Detalhes da reação recebida; null quando o evento não é uma reação.
+        revoke:
+          oneOf:
+            - $ref: "#/components/schemas/WebhookRevoke"
+            - type: "null"
+          description: >-
+            Detalhes da mensagem revogada; null quando o evento não é uma
+            revogação.
+        poll:
+          oneOf:
+            - $ref: "#/components/schemas/WebhookPollCreation"
+            - type: "null"
+          description: >-
+            Detalhes da enquete recebida; âncora do cache SHA-256 -> texto
+            usado para resolver votos posteriores. null quando o evento não é
+            uma criação de enquete.
+        group:
+          oneOf:
+            - $ref: "#/components/schemas/WebhookGroupEvent"
+            - type: "null"
+          description: >-
+            Delta do grupo; presente apenas quando event_type é group.updated.
+        session:
+          oneOf:
+            - $ref: "#/components/schemas/WebhookSessionEvent"
+            - type: "null"
+          description: >-
+            Estado da sessão; presente apenas nos eventos session.connected,
+            session.disconnected e session.logged_out.
+
+    WebhookGroupChange:
+      type: object
+      description: >-
+        Alteração de metadados ou participantes de um grupo. O tipo do evento
+        vem do envelope WebhookInboundEvent; aqui type identifica a alteração.
+      properties:
+        type:
+          type: string
+          enum:
+            - subject
+            - description
+            - announce
+            - locked
+            - participant_add
+            - participant_remove
+            - participant_promote
+            - participant_demote
+            - ephemeral
+            - delete
+            - membership_approval_mode
+            - other
+          description: >-
+            Tipo da alteração no grupo; other mapeia UnknownChanges do upstream.
+        jid:
+          type: string
+          description: JID do participante relacionado à alteração, quando aplicável.
+        participants:
+          type: array
+          description: JIDs dos participantes relacionados à alteração, quando aplicável.
+          items:
+            type: string
+
+    WebhookGroupEvent:
+      type: object
+      description: >-
+        Delta de uma atualização de grupo, não um snapshot. O tipo do evento vem
+        do envelope (WebhookInboundEvent.event_type = group.updated); este
+        objeto não carrega event_type. Campos de metadados só aparecem quando
+        mudaram; participant_count é preenchido apenas quando disponível, pois o
+        evento de grupo do upstream não carrega esse número.
+      properties:
+        jid:
+          type: string
+          description: JID do grupo atualizado.
+        sender_jid:
+          type: string
+          description: >-
+            JID de quem causou a alteração no grupo; obrigatório no evento,
+            ainda que possa vir vazio se o upstream não informar o autor.
+        name:
+          type: [string, "null"]
+          description: >-
+            Novo nome do grupo, somente quando alterado; ausente ou null caso
+            contrário.
+        topic:
+          type: [string, "null"]
+          description: >-
+            Novo tópico do grupo, somente quando alterado; ausente ou null caso
+            contrário.
+        is_announce:
+          type: [boolean, "null"]
+          description: >-
+            Novo estado de envio restrito a administradores, somente quando
+            alterado; ausente ou null caso contrário.
+        is_locked:
+          type: [boolean, "null"]
+          description: >-
+            Novo estado de edição restrita a administradores, somente quando
+            alterado; ausente ou null caso contrário.
+        participant_count:
+          type: [integer, "null"]
+          minimum: 0
+          description: >-
+            Preenchido apenas quando disponível; ausente ou null quando o evento
+            de grupo do upstream não carrega esse número.
+        changes:
+          type: array
+          description: Alterações delta que ocorreram no grupo.
+          items:
+            $ref: "#/components/schemas/WebhookGroupChange"
+
+    WebhookSessionEvent:
+      type: object
+      description: >-
+        Estado da sessão do WhatsApp. O tipo do evento vem do envelope
+        (session.connected, session.disconnected ou session.logged_out); este
+        objeto não carrega event_type. No upstream, events.Connected e
+        events.Disconnected são structs vazias, então os dados vêm do store do
+        gateway; reason só existe em LoggedOut.
+      properties:
+        jid:
+          type: [string, "null"]
+          description: >-
+            JID da conta conectada à sessão, obtido do store quando disponível;
+            ausente ou null antes do pareamento.
+        push_name:
+          type: string
+          description: Nome de exibição da conta.
+        platform:
+          type: string
+          description: Plataforma ou dispositivo associado à sessão.
+        reason:
+          type: string
+          description: >-
+            Motivo disponível somente no evento LoggedOut; ausente em
+            session.connected e session.disconnected.
+
+    HtmlDocument:
+      type: string
+      contentMediaType: text/html
+      description: Documento HTML servido pelos endpoints de documentação.
+
+    OpenAPISpec:
+      type: object
+      additionalProperties: true
+      description: Documento OpenAPI 3.1 serializado (JSON ou YAML).
+
+    MediaBinary:
+      type: string
+      format: binary
+      description: >-
+        Conteúdo binário da mídia, com Content-Type igual ao MIME type original.
+

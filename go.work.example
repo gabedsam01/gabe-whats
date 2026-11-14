@@ -1,0 +1,9 @@
+// OBSOLETO — não use este arquivo.
+//
+// O repositório gabe-whats adotou módulo Go único na raiz (ver go.mod:
+// module github.com/gabedsam01/gabe-whats). Não existem mais módulos Go
+// separados em shared/contracts, apps/api e apps/mcp, então um go.work com
+// múltiplas entradas `use` não é necessário.
+//
+// Mantido apenas como registro histórico da fase de desenho multi-módulo.
+// Para construir o projeto, rode `go build ./...` na raiz do repositório.
