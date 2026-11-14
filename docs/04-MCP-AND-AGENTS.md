@@ -140,3 +140,32 @@ Veja o modelo pronto em [`mcp-config.example.json`](file:///home/gabedsam01/meus
 - **`WEBHOOK_ALLOW_JIDS` / `WEBHOOK_IGNORE_FROM_ME`:** Evita que o agente responda a desconhecidos ou entre em loop infinito respondendo às próprias mensagens.
 - **Modo "Self-Chat" opcional:** Permite conversar com o seu agente enviando mensagens no chat com o seu próprio número ou em um grupo privado dedicado.
   - **Atenção (decisão do projeto):** com `GABE_WHATS_WEBHOOK_IGNORE_FROM_ME=true` (padrão), **o Modo Self-Chat não recebe eventos**, porque no chat consigo mesmo toda mensagem é `is_from_me=true`. Para usar self-chat é preciso desligar o filtro e aceitar o risco de loop — a mitigação recomendada é responder apenas a comandos com prefixo (ex.: `/agente ...`) no handler do agente.
+## 13. Estado da Implementação (S5 concluído)
+
+O servidor MCP está implementado em `apps/mcp` sobre a SDK oficial
+`github.com/modelcontextprotocol/go-sdk` v1.8.0, com dois transportes:
+
+```bash
+# stdio (o cliente MCP sobe o processo)
+go run ./apps/mcp/cmd/mcp-server --transport stdio
+
+# SSE (servidor HTTP para clientes remotos)
+go run ./apps/mcp/cmd/mcp-server --transport sse --sse-addr 127.0.0.1:8090
+```
+
+**Camadas:**
+
+| Arquivo | Papel |
+| :--- | :--- |
+| `cmd/mcp-server/main.go` | Flags, transporte e ciclo de vida |
+| `internal/apiclient/client.go` | Cliente HTTP tipado nos contratos, com mapeamento de `problem+json` |
+| `internal/tools/tools.go` | 22 tools registradas com schema inferido e descrição em pt-BR |
+| `internal/resources/resources.go` | 3 resources de leitura |
+
+**Verificação executada:** handshake `initialize` (protocolo 2025-06-18), `tools/list`
+retornando 22 tools, `resources/list` retornando 3 URIs e `tools/call`
+`whatsapp_session_status` devolvendo o estado real da sessão da API.
+
+**Testes automatizados:** 5 no `apiclient` (chave de API, mapeamento RFC 9457, escape de
+path, query do recent, POST sem body) e 1 em cada pacote de registro usando transportes
+em memória, garantindo que o catálogo de 22 tools e 3 resources não regrida.

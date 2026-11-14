@@ -1,11 +1,11 @@
 {
   "mcpServers": {
     "gabe-whats": {
-      "command": "/usr/local/bin/gabe-whats-mcp",
+      "command": "/caminho/para/gabe-whats-mcp",
       "args": ["--transport", "stdio"],
       "env": {
         "GABE_WHATS_API_URL": "http://127.0.0.1:8080",
-        "GABE_WHATS_API_KEY": "troque-por-sua-chave-secreta"
+        "GABE_WHATS_API_KEY": "a-mesma-chave-do-arquivo-.env-da-API"
       }
     }
   }
