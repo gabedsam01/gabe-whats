@@ -33,13 +33,30 @@ go run ./apps/api/cmd/server
 - Healthcheck (sem autenticação): `/health`
 - Todas as rotas `/api/v1/*` exigem `X-API-Key` ou `Authorization: Bearer`.
 
-Primeiro pareamento:
+## Pareamento (QR Code no terminal)
+
+O daemon **não imprime QR**: ele serve o código em `GET /api/v1/session/qr`. Para
+parear sem abrir o navegador, use o comando dedicado (com o daemon **parado**, pois
+os dois usam o mesmo `session.db`):
 
 ```bash
-curl -H "X-API-Key: $GABE_WHATS_API_KEY" http://127.0.0.1:8080/api/v1/session/qr   # leia o QR
-# ou, sem câmera:
-curl -X POST -H "X-API-Key: $GABE_WHATS_API_KEY" -H 'Content-Type: application/json' \
-     -d '{"phone":"5511999999999"}' http://127.0.0.1:8080/api/v1/session/pair-code
+go run ./apps/api/cmd/pair
 ```
+
+Ele imprime o QR em ASCII, renova automaticamente quando expira e sai com código 0
+depois que o WhatsApp confirma o pareamento. Opções:
+
+- `-invert` — inverte as cores, para terminais onde o leitor não reconhece o código;
+- `-png data/qr.png` — grava também o QR como imagem, para abrir no visualizador.
+
+Depois, suba o daemon normalmente:
+
+```bash
+go run ./apps/api/cmd/server
+```
+
+Alternativas via API (com o daemon rodando): `GET /api/v1/session/qr` devolve o
+código em texto e PNG base64; `POST /api/v1/session/pair-code` gera o código de 8
+dígitos para digitar no celular.
 
 Fechar o processo encerra a conexão via `SIGINT`/`SIGTERM` sem corromper o `session.db`.
