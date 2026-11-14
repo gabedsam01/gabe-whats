@@ -60,3 +60,8 @@ código em texto e PNG base64; `POST /api/v1/session/pair-code` gera o código d
 dígitos para digitar no celular.
 
 Fechar o processo encerra a conexão via `SIGINT`/`SIGTERM` sem corromper o `session.db`.
+
+> **Nunca rode duas instâncias ao mesmo tempo.** O daemon abre a porta HTTP **antes** de
+> conectar ao WhatsApp justamente para que uma porta ocupada falhe sem tocar na sessão:
+> conectar duas vezes com as mesmas credenciais faz o WhatsApp responder `401` e
+> invalidar o pareamento (`logged out from another device`).

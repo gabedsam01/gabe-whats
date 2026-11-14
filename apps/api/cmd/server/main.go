@@ -6,7 +6,9 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -89,6 +91,15 @@ func run() error {
 		}, nil
 	}, nil)
 
+	// O listener é aberto ANTES de tocar na sessão do WhatsApp: se a porta estiver
+	// ocupada, o processo falha sem conectar (uma conexão interrompida de forma
+	// abrupta pode fazer o WhatsApp invalidar a sessão).
+	listener, err := net.Listen("tcp", cfg.HTTPAddr)
+	if err != nil {
+		return fmt.Errorf("escutar em %s: %w", cfg.HTTPAddr, err)
+	}
+	defer func() { _ = listener.Close() }()
+
 	wa, err := whatsapp.New(ctx, cfg, bus, mediaStore, app)
 	if err != nil {
 		return err
@@ -116,7 +127,7 @@ func run() error {
 	listenErr := make(chan error, 1)
 	go func() {
 		slog.Info("API disponível", "docs", cfg.BaseURL()+"/docs", "openapi", cfg.BaseURL()+"/openapi.yaml")
-		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			listenErr <- err
 		}
 	}()
