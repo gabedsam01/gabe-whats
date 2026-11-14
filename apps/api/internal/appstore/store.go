@@ -77,6 +77,16 @@ CREATE TABLE IF NOT EXISTS media (
 );
 
 CREATE INDEX IF NOT EXISTS idx_media_expires ON media(expires_at);
+
+CREATE TABLE IF NOT EXISTS poll_cache (
+	poll_message_id         TEXT PRIMARY KEY,
+	chat_jid                TEXT NOT NULL,
+	question                TEXT NOT NULL,
+	options                 TEXT NOT NULL,
+	selectable_option_count INTEGER NOT NULL DEFAULT 1,
+	poll_sender_jid         TEXT NOT NULL DEFAULT '',
+	created_at              TEXT NOT NULL
+);
 `
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("appstore: aplicar schema: %w", err)
@@ -259,4 +269,68 @@ func (s *Store) PurgeExpiredMedia(ctx context.Context, now time.Time) ([]string,
 		return nil, fmt.Errorf("appstore: apagar mídias vencidas: %w", err)
 	}
 	return paths, nil
+}
+
+// PollRecord é a criação de uma enquete guardada para resolver votos.
+type PollRecord struct {
+	MessageID             string
+	ChatJID               string
+	Question              string
+	Options               []string
+	SelectableOptionCount int
+	PollSenderJID         string
+	CreatedAt             time.Time
+}
+
+// SavePoll grava (upsert) a criação da enquete.
+func (s *Store) SavePoll(ctx context.Context, record PollRecord) error {
+	options, err := json.Marshal(record.Options)
+	if err != nil {
+		return fmt.Errorf("appstore: serializar opções da enquete: %w", err)
+	}
+
+	const query = `
+INSERT INTO poll_cache (poll_message_id, chat_jid, question, options, selectable_option_count, poll_sender_jid, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(poll_message_id) DO UPDATE SET
+	question = excluded.question,
+	options = excluded.options,
+	selectable_option_count = excluded.selectable_option_count`
+
+	_, err = s.db.ExecContext(ctx, query,
+		record.MessageID, record.ChatJID, record.Question, string(options),
+		record.SelectableOptionCount, record.PollSenderJID, time.Now().UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return fmt.Errorf("appstore: gravar enquete: %w", err)
+	}
+	return nil
+}
+
+// GetPoll recupera a enquete pelo ID da mensagem de criação.
+func (s *Store) GetPoll(ctx context.Context, messageID string) (*PollRecord, error) {
+	const query = `
+SELECT poll_message_id, chat_jid, question, options, selectable_option_count, poll_sender_jid, created_at
+FROM poll_cache WHERE poll_message_id = ?`
+
+	var (
+		record  PollRecord
+		options string
+		created string
+	)
+	err := s.db.QueryRowContext(ctx, query, messageID).Scan(
+		&record.MessageID, &record.ChatJID, &record.Question, &options,
+		&record.SelectableOptionCount, &record.PollSenderJID, &created,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("appstore: ler enquete: %w", err)
+	}
+	if err := json.Unmarshal([]byte(options), &record.Options); err != nil {
+		return nil, fmt.Errorf("appstore: opções inválidas: %w", err)
+	}
+	record.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
+	return &record, nil
 }

@@ -44,14 +44,14 @@ Antes de implementar ou modificar qualquer componente, leia a documentação cor
 - Rotas REST & geração OpenAPI (`/docs`): `docs/03-API-SPEC-SWAGGER.md` e `docs/openapi.yaml`
 - Servidor MCP & payload de Webhooks: `docs/04-MCP-AND-AGENTS.md`
 - Contratos Go: `shared/contracts/README.md`
-- Blueprint da API REST: `apps/api/README.md` e `apps/api/internal/whatsapp/blueprint.go`
+- API REST (implementação): `apps/api/README.md` e `apps/api/internal/whatsapp/`
 - Blueprint do Servidor MCP: `apps/mcp/README.md` e `apps/mcp/internal/tools/blueprint.go`
 
 ---
 
 ## 4. Convenções de Trabalho & Verificação
 
-- **Estado atual do repositório:** Fases S1 (contratos + OpenAPI) e S2 (daemon da API) concluídas. `apps/api` já sobe com autenticação por `X-API-Key`/`Bearer`, `/docs`, `/health` e endpoints de sessão; `apps/mcp` continua blueprint até o S5. Não adicione dependências pesadas nem lógica completa fora do escopo pedido sem alinhamento prévio.
+- **Estado atual do repositório:** Fases S1 (contratos + OpenAPI), S2 (daemon), S3 (mensagens e eventos) e S4 (grupos, enquetes e interatividade) concluídas. `apps/api` está funcional ponta a ponta; `apps/mcp` continua blueprint até o S5. Não adicione dependências pesadas nem lógica completa fora do escopo pedido sem alinhamento prévio.
 - **Comandos obrigatórios antes de concluir:** `gofmt -l .` (vazio), `go vet ./...` e `go test ./...`. O alvo `make check` roda todos.
 - **Idioma:** Documentação, comentários de descrição OpenAPI (`doc:"..."`) e mensagens orientadas ao usuário devem ser escritos em **português (pt-BR)**; identificadores Go, nomes de campos JSON e símbolos seguem **inglês** padrão idiomático Go.
 - **Antes de concluir mudanças em código Go:** Execute `gofmt -l .` (e `go test ./...` / `go vet ./...` após os módulos `go.mod` serem inicializados).

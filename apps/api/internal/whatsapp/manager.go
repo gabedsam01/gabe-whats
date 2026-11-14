@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gabedsam01/gabe-whats/apps/api/internal/appstore"
 	"github.com/gabedsam01/gabe-whats/apps/api/internal/config"
 	"github.com/gabedsam01/gabe-whats/shared/contracts"
 	qrcode "github.com/skip2/go-qrcode"
@@ -58,6 +59,7 @@ type Manager struct {
 	cfg       *config.Config
 	publisher Publisher
 	media     MediaSink
+	app       *appstore.Store
 
 	pairMu sync.Mutex
 	pair   *pairingState
@@ -98,7 +100,7 @@ func (p *pairingState) finish(err error) {
 
 // New abre o session.db, recupera o dispositivo e prepara o cliente. Quando já
 // existe sessão, a conexão é iniciada em background para não bloquear o boot.
-func New(ctx context.Context, cfg *config.Config, publisher Publisher, mediaSink MediaSink) (*Manager, error) {
+func New(ctx context.Context, cfg *config.Config, publisher Publisher, mediaSink MediaSink, app *appstore.Store) (*Manager, error) {
 	logger := waLog.Stdout("WhatsApp", strings.ToLower(cfg.LogLevel), true)
 
 	container, err := sqlstore.New(ctx, "sqlite3", cfg.SQLiteDSN, logger)
@@ -120,6 +122,7 @@ func New(ctx context.Context, cfg *config.Config, publisher Publisher, mediaSink
 		cfg:       cfg,
 		publisher: publisher,
 		media:     mediaSink,
+		app:       app,
 	}
 	client.AddEventHandler(m.handleEvent)
 

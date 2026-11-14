@@ -180,3 +180,14 @@ Como a API `EventSource` do navegador não permite enviar headers, a chave real 
 3. O ticket é **de uso único**, vale **60 segundos** e é consumido na abertura da conexão — reuso responde **401**.
 
 Para agentes que conseguem enviar headers (`curl`, MCP), o stream aceita `X-API-Key` diretamente e o ticket é desnecessário. O stream envia um comentário `: ping` a cada 25 segundos para manter a conexão viva.
+## 10. Enquetes e o Cache de Hashes
+
+Enquetes são o mecanismo de interatividade **100% compatível com conta pessoal** (botões e listas dependem do nó `<biz>` e podem ser restringidos pelo app do destinatário).
+
+O protocolo entrega o voto de forma peculiar: `DecryptPollVote` devolve **hashes SHA-256** das opções escolhidas, não o texto. Para que o agente receba algo utilizável:
+
+1. toda enquete **criada ou recebida** é gravada em `app.db` (`poll_cache`) com pergunta e opções em texto;
+2. ao chegar um voto, o ID da mensagem da enquete é usado para recuperar esse registro;
+3. cada hash é comparado com `SHA-256` de cada opção (`HashPollOptions`) e convertido no texto correspondente.
+
+O evento carrega sempre `selected_hashes` e, quando o cache tem a enquete, também `selected_options` em texto. Se a enquete não estiver no cache (ex.: criada antes do gateway existir), o voto **não é perdido**: os hashes continuam disponíveis para correlação.

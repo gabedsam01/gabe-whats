@@ -89,7 +89,7 @@ func run() error {
 		}, nil
 	}, nil)
 
-	wa, err := whatsapp.New(ctx, cfg, bus, mediaStore)
+	wa, err := whatsapp.New(ctx, cfg, bus, mediaStore, app)
 	if err != nil {
 		return err
 	}

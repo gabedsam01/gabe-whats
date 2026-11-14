@@ -9,7 +9,7 @@ Este serviço é o **único dono** da sessão do WhatsApp e dos arquivos SQLite 
 | [`cmd/server/main.go`](cmd/server/main.go) | Bootstrap: carrega configuração, abre a sessão, sobe o HTTP e trata encerramento gracioso. | **Implementado** |
 | [`internal/config/config.go`](internal/config/config.go) | Parsing e validação das variáveis de ambiente (com `.env` opcional). | **Implementado** + testes |
 | [`internal/whatsapp/manager.go`](internal/whatsapp/manager.go) | Conexão, status, QR Code, código de pareamento, reconexão e logout. | **Implementado** + testes de sessão via HTTP |
-| [`internal/whatsapp/blueprint.go`](internal/whatsapp/blueprint.go) | Interface `Service` para envio de mensagens, mídias e grupos. | Interface definida; implementação em S3/S4 |
+| [`internal/whatsapp/`](internal/whatsapp/) | Envio (texto, mídia, PTT, botões, listas, enquetes), ações em mensagens, grupos e normalização de eventos. | **Implementado** |
 | [`internal/http/server.go`](internal/http/server.go) | Chi + Huma, autenticação por chave, `/health`, `/docs` e spec publicada. | **Implementado** |
 | [`internal/http/errors.go`](internal/http/errors.go) | Erros no padrão RFC 9457 (`application/problem+json`). | **Implementado** |
 | [`internal/http/session.go`](internal/http/session.go) | Endpoints de sessão e pareamento. | **Implementado** |

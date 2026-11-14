@@ -24,7 +24,7 @@ import (
 )
 
 // Version é a versão da API exposta em /health e na documentação.
-const Version = "0.3.0-s3"
+const Version = "0.4.0-s4"
 
 // publicPaths são as rotas que dispensam autenticação.
 var publicPaths = map[string]bool{
@@ -87,6 +87,8 @@ func New(cfg *config.Config, deps Deps) *Server {
 	s.registerHealth()
 	s.registerSession()
 	s.registerMessages()
+	s.registerMessageActions()
+	s.registerGroups()
 	s.registerWebhooks()
 	s.registerEventsTicket()
 	s.registerStream()

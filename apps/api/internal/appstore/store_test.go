@@ -102,3 +102,47 @@ func TestMediaLifecycle(t *testing.T) {
 		t.Errorf("registro deveria ter sido removido, obtido %v", err)
 	}
 }
+func TestPollCacheRoundTrip(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	record := PollRecord{
+		MessageID:             "poll-1",
+		ChatJID:               "5511999999999@s.whatsapp.net",
+		Question:              "Qual o melhor horário?",
+		Options:               []string{"Manhã", "Tarde", "Noite"},
+		SelectableOptionCount: 1,
+		PollSenderJID:         "5511888888888@s.whatsapp.net",
+	}
+	if err := store.SavePoll(ctx, record); err != nil {
+		t.Fatalf("SavePoll: %v", err)
+	}
+
+	got, err := store.GetPoll(ctx, "poll-1")
+	if err != nil {
+		t.Fatalf("GetPoll: %v", err)
+	}
+	if got.Question != record.Question {
+		t.Errorf("Question = %q", got.Question)
+	}
+	if len(got.Options) != 3 || got.Options[2] != "Noite" {
+		t.Errorf("Options = %v", got.Options)
+	}
+	if got.SelectableOptionCount != 1 {
+		t.Errorf("SelectableOptionCount = %d", got.SelectableOptionCount)
+	}
+
+	// Upsert atualiza a pergunta sem duplicar.
+	record.Question = "Pergunta corrigida"
+	if err := store.SavePoll(ctx, record); err != nil {
+		t.Fatalf("SavePoll upsert: %v", err)
+	}
+	got, _ = store.GetPoll(ctx, "poll-1")
+	if got.Question != "Pergunta corrigida" {
+		t.Errorf("upsert não atualizou: %q", got.Question)
+	}
+
+	if _, err := store.GetPoll(ctx, "naoexiste"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("esperado ErrNotFound, obtido %v", err)
+	}
+}

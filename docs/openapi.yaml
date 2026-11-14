@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: gabe-whats REST API
-  version: 0.3.0
+  version: 0.4.0
   summary: Gateway pessoal de WhatsApp em Go sobre go.mau.fi/whatsmeow
   description: |
     API REST pessoal sobre go.mau.fi/whatsmeow para envio e recebimento de

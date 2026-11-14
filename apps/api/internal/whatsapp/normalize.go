@@ -27,6 +27,8 @@ func (m *Manager) handleEvent(raw any) {
 	case *events.LoggedOut:
 		m.client.Log.Warnf("sessão encerrada pelo WhatsApp")
 		m.publishSession(contracts.EventSessionLoggedOut, evt.Reason.String())
+	case *events.GroupInfo:
+		m.publishGroupEvent(evt)
 	case *events.Message:
 		if m.publisher == nil {
 			return
@@ -176,6 +178,12 @@ func (m *Manager) normalizeMessage(ctx context.Context, evt *events.Message) *co
 	case msg.GetPollCreationMessage() != nil || msg.GetPollCreationMessageV2() != nil || msg.GetPollCreationMessageV3() != nil:
 		event.MessageType = contracts.WebhookMessageTypePoll
 		event.Poll = m.buildPollCreation(msg, evt)
+		m.cachePollCreation(ctx, event.Poll, event.ChatJID)
+
+	case msg.GetPollUpdateMessage() != nil:
+		event.MessageType = contracts.WebhookMessageTypePollVote
+		event.ReplyToID = msg.GetPollUpdateMessage().GetPollCreationMessageKey().GetID()
+		event.PollVote = m.buildPollVote(ctx, evt)
 	}
 
 	if event.IsEdit && event.Text != "" {
@@ -298,3 +306,91 @@ func (m *Manager) buildMedia(ctx context.Context, msg *waE2E.Message, kind strin
 }
 
 var _ = strings.TrimSpace
+
+// publishGroupEvent publica o delta de um evento de grupo.
+func (m *Manager) publishGroupEvent(evt *events.GroupInfo) {
+	if m.publisher == nil || evt == nil {
+		return
+	}
+	event := m.normalizeGroupEvent(evt)
+	if event == nil {
+		return
+	}
+	m.publisher.Publish(context.Background(), *event)
+}
+
+// normalizeGroupEvent converte *events.GroupInfo no envelope compartilhado.
+func (m *Manager) normalizeGroupEvent(evt *events.GroupInfo) *contracts.WebhookInboundEvent {
+	group := &contracts.WebhookGroupEvent{
+		JID:     evt.JID.String(),
+		Changes: []contracts.WebhookGroupChange{},
+	}
+
+	if evt.Sender != nil {
+		group.SenderJID = evt.Sender.String()
+	}
+
+	if evt.Name != nil {
+		value := evt.Name.Name
+		group.Name = &value
+		group.Changes = append(group.Changes, contracts.WebhookGroupChange{Type: contracts.GroupChangeSubject})
+	}
+	if evt.Topic != nil {
+		value := evt.Topic.Topic
+		group.Topic = &value
+		group.Changes = append(group.Changes, contracts.WebhookGroupChange{Type: contracts.GroupChangeDescription})
+	}
+	if evt.Locked != nil {
+		value := evt.Locked.IsLocked
+		group.IsLocked = &value
+		group.Changes = append(group.Changes, contracts.WebhookGroupChange{Type: contracts.GroupChangeLocked})
+	}
+	if evt.Announce != nil {
+		value := evt.Announce.IsAnnounce
+		group.IsAnnounce = &value
+		group.Changes = append(group.Changes, contracts.WebhookGroupChange{Type: contracts.GroupChangeAnnounce})
+	}
+	if evt.Ephemeral != nil {
+		group.Changes = append(group.Changes, contracts.WebhookGroupChange{Type: contracts.GroupChangeEphemeral})
+	}
+	if evt.Delete != nil && evt.Delete.Deleted {
+		group.Changes = append(group.Changes, contracts.WebhookGroupChange{Type: contracts.GroupChangeDelete})
+	}
+	if evt.MembershipApprovalMode != nil {
+		group.Changes = append(group.Changes, contracts.WebhookGroupChange{Type: contracts.GroupChangeMembershipApprovalMode})
+	}
+	if len(evt.Join) > 0 {
+		group.Changes = append(group.Changes, contracts.WebhookGroupChange{Type: contracts.GroupChangeParticipantAdd, Participants: jidStrings(evt.Join)})
+	}
+	if len(evt.Leave) > 0 {
+		group.Changes = append(group.Changes, contracts.WebhookGroupChange{Type: contracts.GroupChangeParticipantRemove, Participants: jidStrings(evt.Leave)})
+	}
+	if len(evt.Promote) > 0 {
+		group.Changes = append(group.Changes, contracts.WebhookGroupChange{Type: contracts.GroupChangeParticipantPromote, Participants: jidStrings(evt.Promote)})
+	}
+	if len(evt.Demote) > 0 {
+		group.Changes = append(group.Changes, contracts.WebhookGroupChange{Type: contracts.GroupChangeParticipantDemote, Participants: jidStrings(evt.Demote)})
+	}
+	if len(group.Changes) == 0 {
+		group.Changes = append(group.Changes, contracts.WebhookGroupChange{Type: contracts.GroupChangeOther})
+	}
+
+	return &contracts.WebhookInboundEvent{
+		EventID:   fmt.Sprintf("grp-%s-%d", evt.JID.String(), evt.Timestamp.UnixNano()),
+		EventType: contracts.EventGroupUpdated,
+		Timestamp: evt.Timestamp,
+		ChatJID:   evt.JID.String(),
+		SenderJID: group.SenderJID,
+		IsGroup:   true,
+		Group:     group,
+	}
+}
+
+// jidStrings converte uma lista de JIDs em strings.
+func jidStrings(jids []types.JID) []string {
+	out := make([]string, 0, len(jids))
+	for _, jid := range jids {
+		out = append(out, jid.String())
+	}
+	return out
+}
