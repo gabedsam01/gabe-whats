@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: gabe-whats REST API
-  version: 0.2.0
+  version: 0.3.0
   summary: Gateway pessoal de WhatsApp em Go sobre go.mau.fi/whatsmeow
   description: |
     API REST pessoal sobre go.mau.fi/whatsmeow para envio e recebimento de
@@ -1208,6 +1208,32 @@ paths:
         "500":
           $ref: "#/components/responses/InternalServerError"
 
+  /api/v1/events/ticket:
+    post:
+      tags: [Webhooks & Events]
+      operationId: createEventsTicket
+      summary: Emite ticket efêmero para abrir o stream SSE
+      description: >-
+        Emite um ticket de uso único, válido por 60 segundos, para autenticar o
+        stream SSE sem expor a chave da API na URL. Necessário porque a API
+        EventSource do navegador não permite enviar o header X-API-Key. O ticket
+        é consumido na primeira conexão.
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200":
+          description: Ticket emitido
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SSETicketResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
   /api/v1/events/stream:
     get:
       tags: [Webhooks & Events]
@@ -1218,9 +1244,19 @@ paths:
         sempre o envelope WebhookInboundEvent serializado em JSON no campo data;
         event_type discrimina o conteúdo e os objetos group/session só aparecem
         nos eventos correspondentes. A conexão permanece aberta até o cliente
-        desconectar.
+        desconectar. Autentique com o header X-API-Key ou, para clientes de
+        navegador, com o ticket efêmero emitido em POST /api/v1/events/ticket.
       security:
         - ApiKeyAuth: []
+      parameters:
+        - name: ticket
+          in: query
+          required: false
+          schema:
+            type: string
+          description: >-
+            Ticket de uso único obtido em POST /api/v1/events/ticket. Alternativa
+            ao header X-API-Key para EventSource no navegador.
       responses:
         "200":
           description: Stream aberto; cada evento data carrega um WebhookInboundEvent
@@ -2188,9 +2224,11 @@ components:
     WebhookConfig:
       type: object
       description: >-
-        Corpo do PUT /api/v1/webhooks. Nenhum campo é declarado required: o
-        objeto enviado substitui a configuração vigente. O secret é write-only e
-        nunca é retornado; as respostas usam WebhookConfigResponse.
+        Corpo do PUT /api/v1/webhooks, com semântica de substituição completa.
+        Os campos de configuração são obrigatórios; o secret é write-only,
+        nunca é retornado, e quando omitido ou vazio preserva o valor vigente.
+        As respostas usam WebhookConfigResponse.
+      required: [url, ignore_from_me, auto_download_media, include_base64]
       properties:
         url:
           type: string
@@ -2629,6 +2667,24 @@ components:
           description: >-
             Motivo disponível somente no evento LoggedOut; ausente em
             session.connected e session.disconnected.
+
+    SSETicketResponse:
+      type: object
+      description: >-
+        Ticket efêmero de uso único para abrir o stream SSE sem expor a chave da
+        API na URL.
+      properties:
+        ticket:
+          type: string
+          description: Ticket de uso único a apresentar em GET /api/v1/events/stream.
+        expires_at:
+          type: string
+          format: date-time
+          description: Instante em que o ticket expira.
+        stream_url:
+          type: string
+          format: uri
+          description: URL completa do stream, com o ticket já aplicado na query.
 
     HtmlDocument:
       type: string

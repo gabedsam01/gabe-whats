@@ -36,7 +36,7 @@ func (s *Server) registerSessionStatus() {
 		Summary:     "Status da sessão do WhatsApp",
 		Tags:        []string{"Session"},
 	}, func(ctx context.Context, _ *struct{}) (*output, error) {
-		status, err := s.wa.Status(ctx)
+		status, err := s.deps.WhatsApp.Status(ctx)
 		if err != nil {
 			return nil, newProblem(http.StatusInternalServerError, "internal_error", "não foi possível consultar a sessão")
 		}
@@ -56,10 +56,10 @@ func (s *Server) registerSessionQR() {
 		Summary:     "Obtém o QR Code atual para pareamento",
 		Tags:        []string{"Session"},
 	}, func(ctx context.Context, _ *struct{}) (*output, error) {
-		if err := s.wa.StartPairing(ctx); err != nil {
+		if err := s.deps.WhatsApp.StartPairing(ctx); err != nil {
 			return nil, sessionError(err)
 		}
-		qr, err := s.wa.GetQR(ctx)
+		qr, err := s.deps.WhatsApp.GetQR(ctx)
 		if err != nil {
 			return nil, sessionError(err)
 		}
@@ -93,7 +93,7 @@ func (s *Server) registerSessionPairCode() {
 				fieldError("phone", "esperado número com DDI, apenas dígitos"))
 		}
 
-		code, err := s.wa.PairPhone(ctx, phone)
+		code, err := s.deps.WhatsApp.PairPhone(ctx, phone)
 		if err != nil {
 			return nil, sessionError(err)
 		}
@@ -113,7 +113,7 @@ func (s *Server) registerSessionReconnect() {
 		Summary:     "Reconecta o cliente whatsmeow",
 		Tags:        []string{"Session"},
 	}, func(ctx context.Context, _ *struct{}) (*output, error) {
-		if err := s.wa.Reconnect(ctx); err != nil {
+		if err := s.deps.WhatsApp.Reconnect(ctx); err != nil {
 			return nil, sessionError(err)
 		}
 		return &output{Body: &contracts.AckResponse{OK: true, Detail: "reconexão solicitada"}}, nil
@@ -132,7 +132,7 @@ func (s *Server) registerSessionLogout() {
 		Summary:     "Faz logout e remove vínculo do dispositivo",
 		Tags:        []string{"Session"},
 	}, func(ctx context.Context, _ *struct{}) (*output, error) {
-		if err := s.wa.Logout(ctx); err != nil {
+		if err := s.deps.WhatsApp.Logout(ctx); err != nil {
 			return nil, sessionError(err)
 		}
 		return &output{Body: &contracts.AckResponse{OK: true, Detail: "sessão encerrada"}}, nil

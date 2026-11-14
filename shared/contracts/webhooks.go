@@ -176,12 +176,12 @@ type WebhookSessionEvent struct {
 
 // WebhookConfig define o destino do webhook e as regras de filtragem para uso por agentes pessoais.
 type WebhookConfig struct {
-	URL               string   `json:"url" doc:"URI HTTP(S) absoluta de destino do agente (OpenClaw / Hermes / etc.)"`
+	URL               string   `json:"url" required:"true" doc:"URI HTTP(S) absoluta de destino do agente (OpenClaw / Hermes / etc.)"`
 	Secret            string   `json:"secret,omitempty" doc:"write-only: nunca e retornado; assina o corpo com HMAC-SHA256 no header X-GabeWhats-Signature com valor sha256=<hex>"`
-	IgnoreFromMe      bool     `json:"ignore_from_me" doc:"Se true, filtra eventos message.received de mensagens enviadas pelo próprio número para evitar loops"`
+	IgnoreFromMe      bool     `json:"ignore_from_me" required:"true" doc:"Se true, filtra eventos message.received de mensagens enviadas pelo próprio número para evitar loops"`
 	AllowJIDs         []string `json:"allow_jids,omitempty" doc:"Allowlist opcional de chats/números que filtra quais eventos message.received acionam o agente"`
-	AutoDownloadMedia bool     `json:"auto_download_media" doc:"Se true, baixa e descriptografa mídias/áudios automaticamente"`
-	IncludeBase64     bool     `json:"include_base64" doc:"Se true, inclui o conteúdo em Base64 no payload do webhook"`
+	AutoDownloadMedia bool     `json:"auto_download_media" required:"true" doc:"Se true, baixa e descriptografa mídias/áudios automaticamente"`
+	IncludeBase64     bool     `json:"include_base64" required:"true" doc:"Se true, inclui o conteúdo em Base64 no payload do webhook"`
 }
 
 // WebhookConfigResponse é a configuração devolvida pelo GET /api/v1/webhooks e pelo tool MCP, sem expor o segredo.

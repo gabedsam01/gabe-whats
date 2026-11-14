@@ -11,7 +11,11 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
+	"github.com/gabedsam01/gabe-whats/apps/api/internal/appstore"
 	"github.com/gabedsam01/gabe-whats/apps/api/internal/config"
+	"github.com/gabedsam01/gabe-whats/apps/api/internal/events"
+	"github.com/gabedsam01/gabe-whats/apps/api/internal/media"
+	"github.com/gabedsam01/gabe-whats/apps/api/internal/sse"
 	"github.com/gabedsam01/gabe-whats/apps/api/internal/whatsapp"
 	"github.com/gabedsam01/gabe-whats/shared/contracts"
 	"github.com/go-chi/chi/v5"
@@ -20,7 +24,7 @@ import (
 )
 
 // Version é a versão da API exposta em /health e na documentação.
-const Version = "0.1.0-s2"
+const Version = "0.3.0-s3"
 
 // publicPaths são as rotas que dispensam autenticação.
 var publicPaths = map[string]bool{
@@ -30,10 +34,21 @@ var publicPaths = map[string]bool{
 	"/openapi.yaml": true,
 }
 
+// Deps reúne as dependências externas do servidor HTTP.
+type Deps struct {
+	WhatsApp *whatsapp.Manager
+	Bus      *events.Bus
+	Hub      *sse.Hub
+	Tickets  *sse.Tickets
+	App      *appstore.Store
+	Media    *media.Store
+}
+
 // Server monta o roteador, o pipeline Huma e a documentação da API.
 type Server struct {
-	cfg    *config.Config
-	wa     *whatsapp.Manager
+	cfg  *config.Config
+	deps Deps
+
 	router chi.Router
 	api    huma.API
 
@@ -42,10 +57,10 @@ type Server struct {
 }
 
 // New constrói o servidor HTTP com todas as rotas registradas.
-func New(cfg *config.Config, wa *whatsapp.Manager) *Server {
+func New(cfg *config.Config, deps Deps) *Server {
 	installProblemErrors()
 
-	s := &Server{cfg: cfg, wa: wa}
+	s := &Server{cfg: cfg, deps: deps}
 	s.loadSpec()
 
 	router := chi.NewRouter()
@@ -71,6 +86,11 @@ func New(cfg *config.Config, wa *whatsapp.Manager) *Server {
 
 	s.registerHealth()
 	s.registerSession()
+	s.registerMessages()
+	s.registerWebhooks()
+	s.registerEventsTicket()
+	s.registerStream()
+	s.registerMedia()
 	s.registerDocs()
 
 	return s
@@ -118,12 +138,31 @@ func (s *Server) registerHealth() {
 	})
 }
 
-// authenticate exige X-API-Key ou Authorization: Bearer em /api/v1/*.
+// authenticate exige X-API-Key/Bearer em /api/v1/*. O stream SSE aceita um
+// ticket efêmero na query porque EventSource não envia headers.
 func (s *Server) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/api/v1/") {
 			next.ServeHTTP(w, r)
 			return
+		}
+
+		// A URL de mídia é uma capacidade: o ID é aleatório de 128 bits e expira
+		// em 15 minutos, então o próprio link é o segredo (como URL pré-assinada).
+		if strings.HasPrefix(r.URL.Path, "/api/v1/media/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		if r.URL.Path == "/api/v1/events/stream" {
+			if ticket := r.URL.Query().Get("ticket"); ticket != "" {
+				if s.deps.Tickets != nil && s.deps.Tickets.Redeem(ticket) {
+					next.ServeHTTP(w, r)
+					return
+				}
+				writeProblem(w, http.StatusUnauthorized, "unauthorized", "ticket inválido, expirado ou já utilizado")
+				return
+			}
 		}
 
 		key := r.Header.Get("X-API-Key")

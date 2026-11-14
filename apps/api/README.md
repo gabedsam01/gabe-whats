@@ -15,7 +15,11 @@ Este serviço é o **único dono** da sessão do WhatsApp e dos arquivos SQLite 
 | [`internal/http/session.go`](internal/http/session.go) | Endpoints de sessão e pareamento. | **Implementado** |
 | [`internal/http/router.go`](internal/http/router.go) | `PlannedRoutes`: mapa de rotas que serve de contrato para os testes. | **Implementado** |
 | `internal/http/handlers/` e `internal/http/middleware/` | Subdiretórios previstos no desenho. | Não foram necessários: handlers e autenticação vivem em `internal/http` por enquanto |
-| `internal/webhook/` | Normalizador de eventos, fila de entrega com HMAC e hub SSE. | Planejado (S3) |
+| [`internal/appstore/`](internal/appstore/store.go) | SQLite próprio (`app.db`): configuração de webhook e registro de mídias. | **Implementado** + testes |
+| [`internal/media/`](internal/media/store.go) | Gravação de mídia baixada e URL temporária com TTL (padrão 15 min). | **Implementado** + testes |
+| [`internal/webhook/`](internal/webhook/dispatcher.go) | Entrega HTTP POST com HMAC-SHA256, timeout por tentativa e 1 + 5 reentregas (5s, 15s, 25s, 45s, 60s). | **Implementado** + testes |
+| [`internal/sse/`](internal/sse/hub.go) | Hub de Server-Sent Events e tickets efêmeros de uso único (60s). | **Implementado** + testes |
+| [`internal/events/`](internal/events/bus.go) | Barramento: histórico recente, SSE e webhook com filtros (`ignore_from_me`, `allow_jids`). | **Implementado** + testes |
 
 ## Como rodar
 

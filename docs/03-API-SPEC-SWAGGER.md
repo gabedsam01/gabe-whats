@@ -70,7 +70,8 @@ Todos os endpoints (exceto `/health`, `/docs`, `/openapi.json` e `/openapi.yaml`
 | `POST` | `/api/v1/contacts/check` | Verifica se telefones possuem WhatsApp e retorna seus JIDs (`IsOnWhatsApp`). |
 | `GET` | `/api/v1/webhooks` | Lista destinos de webhook configurados e filtros ativos. |
 | `PUT` | `/api/v1/webhooks` | Configura/atualiza URL de webhook, secret HMAC, allowlist e auto-download de mídia. |
-| `GET` | `/api/v1/events/stream` | Stream **SSE (Server-Sent Events)** em tempo real para agentes locais sem precisar expor porta HTTP de webhook. |
+| `POST` | `/api/v1/events/ticket` | Emite um **ticket efêmero** (uso único, 60s) para abrir o stream SSE sem colocar a chave da API na URL. |
+| `GET` | `/api/v1/events/stream` | Stream **SSE (Server-Sent Events)** em tempo real; aceita `X-API-Key` ou `?ticket=`. |
 
 ### 2.5 Mídia (`/api/v1/media`)
 | Método | Rota | Descrição |
@@ -81,10 +82,10 @@ Todos os endpoints (exceto `/health`, `/docs`, `/openapi.json` e `/openapi.yaml`
 | Método | Rota | Descrição |
 | :--- | :--- | :--- |
 | `GET` | `/docs` | Interface interativa (Scalar UI, com opção de Swagger UI) para explorar e testar as rotas. |
-| `GET` | `/openapi.json` | Especificação **OpenAPI 3.1** gerada automaticamente (JSON). |
-| `GET` | `/openapi.yaml` | Especificação **OpenAPI 3.1** gerada automaticamente (YAML). |
+| `GET` | `/openapi.json` | Especificação **OpenAPI 3.1** publicada, em JSON (ver seção 1). |
+| `GET` | `/openapi.yaml` | Especificação **OpenAPI 3.1** publicada, em YAML. |
 
-> Rotas de documentação (`/docs`, `/openapi.json`, `/openapi.yaml`) e `/health` **não exigem autenticação**; todo o restante de `/api/v1/*` exige `X-API-Key` ou `Authorization: Bearer`.
+> Rotas de documentação (`/docs`, `/openapi.json`, `/openapi.yaml`) e `/health` **não exigem autenticação**; todo o restante de `/api/v1/*` exige `X-API-Key` ou `Authorization: Bearer`. Duas exceções deliberadas: o stream SSE aceita `?ticket=` (seção 9) e `/api/v1/media/{id}` é uma **URL de capacidade** — o ID aleatório de 128 bits, com TTL, é o próprio segredo.
 
 ---
 
@@ -150,3 +151,32 @@ Toda mídia exposta em alguma resposta da API (foto de grupo, mídia de mensagen
 O conteúdo é servido por `GET /api/v1/media/{id}` (seção 2.5) com **TTL padrão de 15 minutos**, configurável por `GABE_WHATS_MEDIA_URL_TTL` (ver [`.env.example`](file:///home/gabedsam01/meus_projetos/gabe-whats/.env.example)).
 
 Fluxo esperado do agente: receber a resposta → baixar o arquivo via `download_url` → guardar a mídia no próprio contexto/armazenamento antes do vencimento. Após `expires_at`, a URL expira e a requisição recebe erro `4xx` (`application/problem+json`); o agente deve então obter a mídia novamente para receber uma URL nova.
+Após `expires_at` a API responde **410 Gone** com `code: media_expired`. O campo `media_id` do evento permite pedir a mídia novamente ao remetente.
+
+## 8. Entrega de Webhook
+
+Quando uma mensagem é recebida, a API publica `WebhookInboundEvent` via `POST` na URL configurada em `PUT /api/v1/webhooks` (ou em `GABE_WHATS_WEBHOOK_URL` quando o banco ainda não tem configuração).
+
+**Cabeçalhos enviados:**
+
+| Header | Conteúdo |
+| :--- | :--- |
+| `X-GabeWhats-Signature` | `sha256=<hex>` — HMAC-SHA256 do corpo cru, usando o segredo configurado |
+| `X-GabeWhats-Delivery` | ID do evento, útil para deduplicação |
+| `X-GabeWhats-Event` | `event_type` do evento |
+
+**Política de reentrega:** a primeira requisição sai imediatamente. Se o destino não responder com sucesso (2xx) em **2 segundos**, a tentativa é considerada falha e as próximas são agendadas após **5s, 15s, 25s, 45s e 60s** — ou seja, 1 requisição inicial + 5 reentregas. Esgotadas as tentativas, a entrega é descartada e registrada em log; o histórico de `GET /api/v1/messages/recent` continua disponível como rede de segurança.
+
+**Filtros:** `ignore_from_me=true` (padrão) descarta `message.received` enviadas pelo próprio número — necessário para evitar loop de auto-resposta. `allow_jids`, quando preenchido, restringe `message.received` aos chats ou remetentes listados.
+
+## 9. Stream SSE e Ticket Efêmero
+
+O endpoint `GET /api/v1/events/stream` entrega os mesmos eventos do webhook em tempo real, com `Content-Type: text/event-stream` e o envelope JSON no `data`.
+
+Como a API `EventSource` do navegador não permite enviar headers, a chave real nunca vai na URL. O fluxo é:
+
+1. `POST /api/v1/events/ticket` com `X-API-Key` → devolve `{ticket, expires_at, stream_url}`.
+2. Abrir `GET /api/v1/events/stream?ticket=<ticket>`.
+3. O ticket é **de uso único**, vale **60 segundos** e é consumido na abertura da conexão — reuso responde **401**.
+
+Para agentes que conseguem enviar headers (`curl`, MCP), o stream aceita `X-API-Key` diretamente e o ticket é desnecessário. O stream envia um comentário `: ping` a cada 25 segundos para manter a conexão viva.

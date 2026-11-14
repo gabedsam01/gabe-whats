@@ -6,6 +6,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -146,6 +147,20 @@ func (c *Config) IsLoopback() bool {
 	default:
 		return false
 	}
+}
+
+// BaseURL devolve a URL base para links públicos (mídia e SSE), trocando
+// endereços curinga por loopback.
+func (c *Config) BaseURL() string {
+	host, port, err := net.SplitHostPort(c.HTTPAddr)
+	if err != nil {
+		return "http://" + c.HTTPAddr
+	}
+	switch host {
+	case "", "0.0.0.0", "::":
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port)
 }
 
 func stringEnv(key, fallback string) string {

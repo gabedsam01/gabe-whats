@@ -67,7 +67,7 @@ Todas as tools possuem prefixo `whatsapp_` e retornam JSON estruturado (incluind
 
 ## 4. Payload Padronizado de Webhook para Agentes
 
-Quando uma mensagem ou evento chega no WhatsApp, a `apps/api` normaliza o evento Protobuf do `whatsmeow` em um JSON limpo e envia `POST <WEBHOOK_URL>` com assinatura `X-GabeWhats-Signature: sha256=<hmac>`:
+Quando uma mensagem ou evento chega no WhatsApp, a `apps/api` normaliza o evento Protobuf do `whatsmeow` em um JSON limpo e envia `POST <WEBHOOK_URL>` com assinatura `X-GabeWhats-Signature: sha256=<hmac>`. A política de reentrega (1 inicial + 5 reentregas em 5s, 15s, 25s, 45s e 60s) e o ticket do SSE estão detalhados em [`03-API-SPEC-SWAGGER.md`](03-API-SPEC-SWAGGER.md) seções 8 e 9.
 
 ```json
 {

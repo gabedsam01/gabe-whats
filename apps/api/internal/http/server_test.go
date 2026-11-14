@@ -23,7 +23,7 @@ func newTestServer(t *testing.T) *Server {
 		LogLevel:    "error",
 		OpenAPIPath: "../../../../docs/openapi.yaml",
 	}
-	s := New(cfg, nil)
+	s := New(cfg, Deps{})
 	if len(s.specJSON) == 0 {
 		t.Fatal("a especificação OpenAPI não foi carregada do disco")
 	}
@@ -124,8 +124,8 @@ func TestDocsAndSpec(t *testing.T) {
 	if spec.OpenAPI != "3.1.0" {
 		t.Errorf("openapi = %q; esperado 3.1.0", spec.OpenAPI)
 	}
-	if len(spec.Paths) != 31 {
-		t.Errorf("paths = %d; esperado 31", len(spec.Paths))
+	if len(spec.Paths) != 32 {
+		t.Errorf("paths = %d; esperado 32", len(spec.Paths))
 	}
 }
 

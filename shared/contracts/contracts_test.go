@@ -20,6 +20,8 @@ import (
 var contractStructs = []any{
 	// common.go
 	Problem{}, ProblemField{}, HealthResponse{}, AckResponse{}, MediaRef{},
+	// events.go
+	SSETicketResponse{},
 	// session.go
 	SessionStatus{}, QRCodeResponse{}, PairCodeRequest{}, PairCodeResponse{},
 	// contacts.go

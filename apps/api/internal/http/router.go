@@ -61,5 +61,6 @@ var PlannedRoutes = []RouteBlueprint{
 	{Method: "POST", Path: "/api/v1/contacts/check", Tag: "Contacts", Summary: "Verificar números no WhatsApp"},
 	{Method: "GET", Path: "/api/v1/webhooks", Tag: "Webhooks & Events", Summary: "Consultar configuração de webhook"},
 	{Method: "PUT", Path: "/api/v1/webhooks", Tag: "Webhooks & Events", Summary: "Atualizar webhook e filtros"},
+	{Method: "POST", Path: "/api/v1/events/ticket", Tag: "Webhooks & Events", Summary: "Emite ticket efêmero para abrir o stream SSE"},
 	{Method: "GET", Path: "/api/v1/events/stream", Tag: "Webhooks & Events", Summary: "Stream SSE em tempo real"},
 }

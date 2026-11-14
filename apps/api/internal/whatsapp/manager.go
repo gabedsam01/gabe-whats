@@ -17,7 +17,6 @@ import (
 	qrcode "github.com/skip2/go-qrcode"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/store/sqlstore"
-	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
 )
 
@@ -40,11 +39,25 @@ var (
 	ErrPairingTimeout = errors.New("tempo esgotado aguardando o QR Code")
 )
 
+// Publisher recebe eventos normalizados (webhook/SSE/histórico).
+type Publisher interface {
+	Publish(ctx context.Context, event contracts.WebhookInboundEvent)
+}
+
+// MediaSink armazena mídias baixadas e devolve a referência com URL temporária.
+type MediaSink interface {
+	Save(ctx context.Context, data []byte, mimeType, filename string) (*contracts.MediaRef, error)
+}
+
 // Manager é o dono exclusivo da sessão do WhatsApp neste processo.
 type Manager struct {
 	client    *whatsmeow.Client
 	container *sqlstore.Container
 	startedAt time.Time
+
+	cfg       *config.Config
+	publisher Publisher
+	media     MediaSink
 
 	pairMu sync.Mutex
 	pair   *pairingState
@@ -85,7 +98,7 @@ func (p *pairingState) finish(err error) {
 
 // New abre o session.db, recupera o dispositivo e prepara o cliente. Quando já
 // existe sessão, a conexão é iniciada em background para não bloquear o boot.
-func New(ctx context.Context, cfg *config.Config) (*Manager, error) {
+func New(ctx context.Context, cfg *config.Config, publisher Publisher, mediaSink MediaSink) (*Manager, error) {
 	logger := waLog.Stdout("WhatsApp", strings.ToLower(cfg.LogLevel), true)
 
 	container, err := sqlstore.New(ctx, "sqlite3", cfg.SQLiteDSN, logger)
@@ -100,7 +113,14 @@ func New(ctx context.Context, cfg *config.Config) (*Manager, error) {
 	}
 
 	client := whatsmeow.NewClient(device, logger)
-	m := &Manager{client: client, container: container, startedAt: time.Now()}
+	m := &Manager{
+		client:    client,
+		container: container,
+		startedAt: time.Now(),
+		cfg:       cfg,
+		publisher: publisher,
+		media:     mediaSink,
+	}
 	client.AddEventHandler(m.handleEvent)
 
 	if client.Store.ID != nil {
@@ -288,17 +308,4 @@ func (m *Manager) Logout(ctx context.Context) error {
 	m.pair = nil
 	m.pairMu.Unlock()
 	return nil
-}
-
-// handleEvent mantém apenas o essencial nesta fase: registra transições de
-// conexão. A normalização para webhook/SSE entra na fase S3.
-func (m *Manager) handleEvent(evt any) {
-	switch evt.(type) {
-	case *events.Connected:
-		m.client.Log.Infof("conectado ao WhatsApp")
-	case *events.Disconnected:
-		m.client.Log.Warnf("desconectado do WhatsApp")
-	case *events.LoggedOut:
-		m.client.Log.Warnf("sessão encerrada pelo WhatsApp")
-	}
 }
