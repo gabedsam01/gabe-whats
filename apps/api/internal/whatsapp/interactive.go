@@ -62,7 +62,7 @@ func (m *Manager) SendButtons(ctx context.Context, req contracts.SendButtonsRequ
 
 	resp, err := m.sendWithBizNode(ctx, to, &waE2E.Message{InteractiveMessage: interactive})
 	if err != nil {
-		return nil, fmt.Errorf("enviar botões: %w", err)
+		return nil, interactiveSendError("enviar botões", err)
 	}
 	return messageResponse(resp, to, "sent"), nil
 }
@@ -100,7 +100,7 @@ func (m *Manager) SendList(ctx context.Context, req contracts.SendListRequest) (
 
 	resp, err := m.sendWithBizNode(ctx, to, &waE2E.Message{ListMessage: list})
 	if err != nil {
-		return nil, fmt.Errorf("enviar lista: %w", err)
+		return nil, interactiveSendError("enviar lista", err)
 	}
 	return messageResponse(resp, to, "sent"), nil
 }
@@ -224,4 +224,18 @@ func interactiveFooter(text string) *waE2E.InteractiveMessage_Footer {
 		return nil
 	}
 	return &waE2E.InteractiveMessage_Footer{Text: proto.String(text)}
+}
+
+// ErrInteractiveUnsupported indica que o servidor do WhatsApp recusou botões ou
+// listas. Em contas pessoais o protocolo atual responde 473/479: mensagens
+// NativeFlow/ListMessage são aceitas apenas em contas Business.
+var ErrInteractiveUnsupported = errors.New("mensagens interativas não suportadas para esta conta")
+
+// interactiveSendError traduz a recusa do servidor em erro acionável.
+func interactiveSendError(operation string, err error) error {
+	message := err.Error()
+	if strings.Contains(message, "error 473") || strings.Contains(message, "error 479") {
+		return fmt.Errorf("%w: %s: %v", ErrInteractiveUnsupported, operation, err)
+	}
+	return fmt.Errorf("%s: %w", operation, err)
 }

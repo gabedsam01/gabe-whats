@@ -288,14 +288,31 @@ func (m *Manager) PairPhone(ctx context.Context, phone string) (*contracts.PairC
 }
 
 // Reconnect derruba e restabelece o WebSocket sem deslogar.
-func (m *Manager) Reconnect(ctx context.Context) error {
+//
+// A reconexão roda em background: usar o contexto da requisição HTTP faria o
+// connect ser cancelado no instante em que a resposta fosse escrita. O retorno
+// indica apenas que a reconexão foi agendada.
+func (m *Manager) Reconnect(_ context.Context) error {
 	if m.client.Store.ID == nil {
 		return errors.New("dispositivo não pareado")
 	}
-	m.client.Disconnect()
-	if err := m.client.ConnectContext(ctx); err != nil {
-		return fmt.Errorf("reconectar: %w", err)
+
+	if m.client.IsConnected() {
+		// ResetConnection força o auto-reconnect do upstream sem deslogar.
+		m.client.ResetConnection()
+		return nil
 	}
+
+	// Já desconectado: abrir uma conexão nova em background, porque o contexto
+	// da requisição HTTP morre junto com a resposta.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := m.client.ConnectContext(ctx); err != nil {
+			m.client.Log.Errorf("reconexão falhou: %v", err)
+		}
+	}()
+
 	return nil
 }
 

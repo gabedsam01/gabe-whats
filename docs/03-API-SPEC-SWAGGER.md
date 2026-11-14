@@ -191,3 +191,43 @@ O protocolo entrega o voto de forma peculiar: `DecryptPollVote` devolve **hashes
 3. cada hash é comparado com `SHA-256` de cada opção (`HashPollOptions`) e convertido no texto correspondente.
 
 O evento carrega sempre `selected_hashes` e, quando o cache tem a enquete, também `selected_options` em texto. Se a enquete não estiver no cache (ex.: criada antes do gateway existir), o voto **não é perdido**: os hashes continuam disponíveis para correlação.
+## 11. Botões e Listas (limitação observada do protocolo)
+
+Botões (`InteractiveMessage`) e listas (`ListMessage`) são implementados com o nó
+`<biz><interactive type="native_flow" v="1"><native_flow name="mixed"/></interactive></biz>`
+injetado via `SendRequestExtra.AdditionalNodes`, conforme a documentação do Multi-Device.
+
+**Medição em ambiente real (14/11/2026):** com uma conta **WhatsApp Business** pareada como
+companion device, o servidor recusou ambas as mensagens:
+
+| Endpoint | Erro do servidor | HTTP da API |
+| :--- | :--- | :--- |
+| `POST /api/v1/messages/buttons` | `server returned error 473` | 422 `interactive_unsupported` |
+| `POST /api/v1/messages/list` | `server returned error 479` | 422 `interactive_unsupported` |
+
+A recusa é do **canal Web/companion**, não do tipo de conta: contas Business também não
+conseguem enviar NativeFlow por esse caminho (a alternativa oficial é a Cloud API, que é
+outro produto). Por isso a API traduz a recusa em `interactive_unsupported` com mensagem
+apontando a alternativa.
+
+**Recomendação:** use `POST /api/v1/messages/poll` para interatividade — enquete nativa
+funciona em qualquer conta e o voto é decodificado (seção 10). Os endpoints de botões e
+lista continuam disponíveis caso o comportamento mude ou o destino seja outro tipo de conta.
+## 12. Validação com Tráfego Real (14/11/2026)
+
+Teste ponta a ponta executado com uma conta **WhatsApp Business** pareada como companion device:
+
+| Fluxo | Evidência |
+| :--- | :--- |
+| Envio de texto | `message_id` devolvido e mensagem entregue |
+| Envio de imagem | upload + `message_id` |
+| Envio de enquete | `message_id` + registro em `poll_cache` |
+| Recebimento de texto | evento `text` com `chat_jid` normalizado para o número |
+| Recebimento de imagem | `DownloadAny` + arquivo em `data/media` + `GET /media/{id}` respondendo `200 image/jpeg` |
+| Voto de enquete | `selected_options: ["Opcao A"]` (hash SHA-256 resolvido pelo cache) |
+| Listagem de grupos | 7 grupos com participantes |
+| Webhook | `session.connected/disconnected` entregues com `X-GabeWhats-Signature` |
+| SSE | mesmo envelope, framing `event: message` |
+
+Achados corrigidos nesta rodada: reconexão que não reconectava, eventos de protocolo publicados como `unknown`,
+identidade `@lid` não traduzida para número e falha de boot tocando na sessão do WhatsApp.

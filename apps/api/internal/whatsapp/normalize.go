@@ -75,8 +75,8 @@ func (m *Manager) normalizeMessage(ctx context.Context, evt *events.Message) *co
 		EventID:     "evt-" + evt.Info.ID,
 		EventType:   contracts.EventMessageReceived,
 		Timestamp:   evt.Info.Timestamp,
-		ChatJID:     evt.Info.Chat.String(),
-		SenderJID:   evt.Info.Sender.String(),
+		ChatJID:     m.resolveJID(ctx, evt.Info.Chat),
+		SenderJID:   m.resolveJID(ctx, evt.Info.Sender),
 		SenderName:  evt.Info.PushName,
 		IsGroup:     evt.Info.Chat.Server == types.GroupServer,
 		IsFromMe:    evt.Info.IsFromMe,
@@ -184,6 +184,28 @@ func (m *Manager) normalizeMessage(ctx context.Context, evt *events.Message) *co
 		event.MessageType = contracts.WebhookMessageTypePollVote
 		event.ReplyToID = msg.GetPollUpdateMessage().GetPollCreationMessageKey().GetID()
 		event.PollVote = m.buildPollVote(ctx, evt)
+
+	case msg.GetLocationMessage() != nil:
+		location := msg.GetLocationMessage()
+		event.MessageType = contracts.WebhookMessageTypeLocation
+		event.Text = firstNonEmpty(location.GetName(), location.GetAddress())
+
+	case msg.GetContactMessage() != nil:
+		contact := msg.GetContactMessage()
+		event.MessageType = contracts.WebhookMessageTypeContact
+		event.Text = contact.GetDisplayName()
+
+	case msg.GetContactsArrayMessage() != nil:
+		contacts := msg.GetContactsArrayMessage()
+		event.MessageType = contracts.WebhookMessageTypeContact
+		event.Text = contacts.GetDisplayName()
+	}
+
+	// Mensagens de protocolo (sync de histórico, app state, chaves de grupo etc.)
+	// não têm conteúdo útil para agentes: descartar evita poluir o histórico e o
+	// webhook. Tipos realmente desconhecidos também são ignorados nesta fase.
+	if event.MessageType == contracts.WebhookMessageTypeUnknown {
+		return nil
 	}
 
 	if event.IsEdit && event.Text != "" {
@@ -191,6 +213,26 @@ func (m *Manager) normalizeMessage(ctx context.Context, evt *events.Message) *co
 	}
 
 	return event
+}
+
+// resolveJID converte um JID @lid no número (@s.whatsapp.net) quando o
+// whatsmeow conhece o mapeamento; caso contrário devolve o próprio JID.
+func (m *Manager) resolveJID(ctx context.Context, jid types.JID) string {
+	if jid.Server != types.HiddenUserServer {
+		return jid.String()
+	}
+	if m.client.Store.LIDs != nil {
+		pn, err := m.client.Store.LIDs.GetPNForLID(ctx, jid)
+		if err == nil && !pn.IsEmpty() {
+			return pn.String()
+		}
+		if err != nil {
+			m.client.Log.Debugf("não foi possível resolver LID %s: %v", jid.String(), err)
+		} else {
+			m.client.Log.Debugf("LID %s sem mapeamento para número", jid.String())
+		}
+	}
+	return jid.String()
 }
 
 // buildPollCreation extrai a enquete recebida (âncora do cache de hashes).

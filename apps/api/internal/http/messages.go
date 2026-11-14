@@ -146,8 +146,14 @@ func (s *Server) registerRecentMessages() {
 
 // sendError traduz falhas de envio em Problem.
 func sendError(err error) error {
-	if errors.Is(err, whatsapp.ErrInvalidInput) {
+	switch {
+	case errors.Is(err, whatsapp.ErrInvalidInput):
 		return newProblem(http.StatusUnprocessableEntity, "validation_failed", err.Error())
+	case errors.Is(err, whatsapp.ErrInteractiveUnsupported):
+		return newProblem(http.StatusUnprocessableEntity, "interactive_unsupported",
+			"o WhatsApp recusou a mensagem interativa: botões e listas só são aceitos em contas Business. "+
+				"Use POST /api/v1/messages/poll como alternativa garantida para conta pessoal")
+	default:
+		return newProblem(http.StatusBadGateway, "whatsapp_error", err.Error())
 	}
-	return newProblem(http.StatusBadGateway, "whatsapp_error", err.Error())
 }
