@@ -262,3 +262,18 @@ O `whatsmeow` guarda o vídeo-nota no campo `PtvMessage`, e o helper `client.Dow
 `DocumentMessage` e `StickerMessage`). Usar `DownloadAny` resulta em
 `didn't find any attachments in message`. Por isso o normalizador baixa o PTV com
 `client.Download(ctx, msg.GetPtvMessage())` diretamente.
+### Templates de conta Business
+
+Mensagens de contas Business (cobrança, atualização de pedido, OTP) chegam embrulhadas em
+`TemplateMessage`. O normalizador desembrulha o conteúdo real — imagem, vídeo, documento,
+localização ou texto — e publica o evento como se fosse uma mensagem comum, usando
+`hydratedContentText` como texto de apoio quando não há legenda.
+
+Antes desse tratamento a mensagem caía em "tipo não mapeado" e era descartada.
+
+### Álbuns
+
+O WhatsApp entrega um álbum como **várias mensagens de mídia independentes**, cada uma com
+seu próprio `message_id`. Não existe agrupamento no envelope que chega (o `AlbumMessage`
+não carrega os filhos). Na prática: 6 fotos enviadas juntas geram 6 eventos `image`
+distintos, todos com download próprio.

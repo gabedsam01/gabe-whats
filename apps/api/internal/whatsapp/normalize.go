@@ -95,6 +95,14 @@ func (m *Manager) normalizeMessage(ctx context.Context, evt *events.Message) *co
 
 	msg := evt.Message
 
+	// Mensagens de contas Business (cobrança, atualização de pedido, OTP) chegam
+	// embrulhadas em TemplateMessage; o conteúdo real está dentro do template.
+	templateText := ""
+	if content, text := templateContent(msg); content != nil {
+		msg = content
+		templateText = text
+	}
+
 	switch {
 	case len(msg.GetConversation()) > 0:
 		event.MessageType = contracts.WebhookMessageTypeText
@@ -233,6 +241,11 @@ func (m *Manager) normalizeMessage(ctx context.Context, evt *events.Message) *co
 	if event.MessageType == contracts.WebhookMessageTypeUnknown {
 		m.client.Log.Debugf("mensagem ignorada por tipo não mapeado: id=%s chat=%s", evt.Info.ID, evt.Info.Chat.String())
 		return nil
+	}
+
+	// Templates sem mídia usam o texto do template; com mídia, a legenda vence.
+	if event.Text == "" && templateText != "" {
+		event.Text = templateText
 	}
 
 	if event.IsEdit && event.Text != "" {
@@ -480,4 +493,54 @@ func jidStrings(jids []types.JID) []string {
 		out = append(out, jid.String())
 	}
 	return out
+}
+
+// templateContent desembrulha o conteúdo de uma mensagem de template Business.
+// Devolve a mensagem interna (imagem, vídeo, documento, localização ou texto) e
+// um texto de fallback vindo do template.
+func templateContent(msg *waE2E.Message) (*waE2E.Message, string) {
+	template := msg.GetTemplateMessage()
+	if template == nil {
+		return nil, ""
+	}
+
+	if four := template.GetFourRowTemplate(); four != nil {
+		switch {
+		case four.GetImageMessage() != nil:
+			return &waE2E.Message{ImageMessage: four.GetImageMessage()}, ""
+		case four.GetVideoMessage() != nil:
+			return &waE2E.Message{VideoMessage: four.GetVideoMessage()}, ""
+		case four.GetDocumentMessage() != nil:
+			return &waE2E.Message{DocumentMessage: four.GetDocumentMessage()}, ""
+		case four.GetLocationMessage() != nil:
+			return &waE2E.Message{LocationMessage: four.GetLocationMessage()}, ""
+		}
+	}
+
+	for _, hydrated := range []*waE2E.TemplateMessage_HydratedFourRowTemplate{
+		template.GetHydratedFourRowTemplate(),
+		template.GetHydratedTemplate(),
+	} {
+		if hydrated == nil {
+			continue
+		}
+		content := hydrated.GetHydratedContentText()
+		switch {
+		case hydrated.GetImageMessage() != nil:
+			return &waE2E.Message{ImageMessage: hydrated.GetImageMessage()}, content
+		case hydrated.GetVideoMessage() != nil:
+			return &waE2E.Message{VideoMessage: hydrated.GetVideoMessage()}, content
+		case hydrated.GetDocumentMessage() != nil:
+			return &waE2E.Message{DocumentMessage: hydrated.GetDocumentMessage()}, content
+		case hydrated.GetLocationMessage() != nil:
+			return &waE2E.Message{LocationMessage: hydrated.GetLocationMessage()}, ""
+		case hydrated.GetHydratedTitleText() != "":
+			title := hydrated.GetHydratedTitleText()
+			return &waE2E.Message{Conversation: &title}, content
+		case content != "":
+			return &waE2E.Message{Conversation: &content}, ""
+		}
+	}
+
+	return nil, ""
 }

@@ -95,3 +95,49 @@ func TestNormalizeMapeiaTipos(t *testing.T) {
 		}
 	})
 }
+func TestNormalizeDesembrulhaTemplate(t *testing.T) {
+	manager := testManager()
+	ctx := context.Background()
+
+	t.Run("template com imagem (four row)", func(t *testing.T) {
+		msg := &waE2E.Message{TemplateMessage: &waE2E.TemplateMessage{
+			Format: &waE2E.TemplateMessage_FourRowTemplate_{
+				FourRowTemplate: &waE2E.TemplateMessage_FourRowTemplate{
+					Title: &waE2E.TemplateMessage_FourRowTemplate_ImageMessage{
+						ImageMessage: &waE2E.ImageMessage{
+							Mimetype:   proto.String("image/jpeg"),
+							FileLength: proto.Uint64(1234),
+						},
+					},
+				},
+			},
+		}}
+		event := manager.normalizeMessage(ctx, testEvent(msg))
+		if event == nil || event.MessageType != contracts.WebhookMessageTypeImage {
+			t.Fatalf("tipo inesperado: %+v", event)
+		}
+		if event.Media == nil || event.Media.MimeType != "image/jpeg" || event.Media.FileSize != 1234 {
+			t.Fatalf("mídia inesperada: %+v", event.Media)
+		}
+	})
+
+	t.Run("template hidratado com texto", func(t *testing.T) {
+		msg := &waE2E.Message{TemplateMessage: &waE2E.TemplateMessage{
+			Format: &waE2E.TemplateMessage_HydratedFourRowTemplate_{
+				HydratedFourRowTemplate: &waE2E.TemplateMessage_HydratedFourRowTemplate{
+					Title: &waE2E.TemplateMessage_HydratedFourRowTemplate_HydratedTitleText{
+						HydratedTitleText: "Aviso de cobrança",
+					},
+					HydratedContentText: proto.String("Sua fatura venceu"),
+				},
+			},
+		}}
+		event := manager.normalizeMessage(ctx, testEvent(msg))
+		if event == nil || event.MessageType != contracts.WebhookMessageTypeText {
+			t.Fatalf("tipo inesperado: %+v", event)
+		}
+		if event.Text != "Aviso de cobrança" {
+			t.Errorf("texto = %q", event.Text)
+		}
+	})
+}
