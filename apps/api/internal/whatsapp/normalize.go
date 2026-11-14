@@ -167,6 +167,22 @@ func (m *Manager) normalizeMessage(ctx context.Context, evt *events.Message) *co
 			ByMe:            evt.Info.IsFromMe,
 		}
 
+	case msg.GetEncReactionMessage() != nil:
+		// Reações de clientes novos chegam cifradas (EncReactionMessage); a chave
+		// vem do segredo da mensagem original e o whatsmeow faz a decifragem.
+		decrypted, err := m.client.DecryptReaction(ctx, evt)
+		if err != nil {
+			m.client.Log.Warnf("não foi possível decifrar reação criptografada: %v", err)
+			return nil
+		}
+		event.MessageType = contracts.WebhookMessageTypeReaction
+		event.Reaction = &contracts.WebhookReaction{
+			Emoji:           decrypted.GetText(),
+			TargetMessageID: decrypted.GetKey().GetID(),
+			TargetSenderJID: decrypted.GetKey().GetParticipant(),
+			ByMe:            evt.Info.IsFromMe,
+		}
+
 	case msg.GetProtocolMessage() != nil && msg.GetProtocolMessage().GetType() == waE2E.ProtocolMessage_REVOKE:
 		protocol := msg.GetProtocolMessage()
 		event.MessageType = contracts.WebhookMessageTypeRevoke
@@ -190,6 +206,15 @@ func (m *Manager) normalizeMessage(ctx context.Context, evt *events.Message) *co
 		event.MessageType = contracts.WebhookMessageTypeLocation
 		event.Text = firstNonEmpty(location.GetName(), location.GetAddress())
 
+	case msg.GetLiveLocationMessage() != nil:
+		live := msg.GetLiveLocationMessage()
+		event.MessageType = contracts.WebhookMessageTypeLocation
+		event.Text = firstNonEmpty(live.GetCaption(), "(localização em tempo real)")
+
+	case msg.GetPtvMessage() != nil:
+		event.MessageType = contracts.WebhookMessageTypeVideo
+		event.Media = m.buildMedia(ctx, msg, "ptv")
+
 	case msg.GetContactMessage() != nil:
 		contact := msg.GetContactMessage()
 		event.MessageType = contracts.WebhookMessageTypeContact
@@ -203,8 +228,10 @@ func (m *Manager) normalizeMessage(ctx context.Context, evt *events.Message) *co
 
 	// Mensagens de protocolo (sync de histórico, app state, chaves de grupo etc.)
 	// não têm conteúdo útil para agentes: descartar evita poluir o histórico e o
-	// webhook. Tipos realmente desconhecidos também são ignorados nesta fase.
+	// webhook. O tipo é registrado em debug para que um tipo novo apareça no log
+	// em vez de desaparecer silenciosamente.
 	if event.MessageType == contracts.WebhookMessageTypeUnknown {
+		m.client.Log.Debugf("mensagem ignorada por tipo não mapeado: id=%s chat=%s", evt.Info.ID, evt.Info.Chat.String())
 		return nil
 	}
 
@@ -307,6 +334,14 @@ func (m *Manager) buildMedia(ctx context.Context, msg *waE2E.Message, kind strin
 		payload.FileSize = int64(doc.GetFileLength())
 		payload.Filename = doc.GetFileName()
 		payload.Caption = doc.GetCaption()
+	case "ptv":
+		ptv := msg.GetPtvMessage()
+		payload.MimeType = ptv.GetMimetype()
+		payload.FileSize = int64(ptv.GetFileLength())
+		payload.Width = int(ptv.GetWidth())
+		payload.Height = int(ptv.GetHeight())
+		payload.Seconds = int(ptv.GetSeconds())
+		payload.Caption = ptv.GetCaption()
 	case "sticker":
 		sticker := msg.GetStickerMessage()
 		payload.MimeType = sticker.GetMimetype()
@@ -324,7 +359,17 @@ func (m *Manager) buildMedia(ctx context.Context, msg *waE2E.Message, kind strin
 		return payload
 	}
 
-	data, err := m.client.DownloadAny(ctx, msg)
+	// DownloadAny não conhece PtvMessage (vídeo-nota): a mensagem vem no campo
+	// PtvMessage e precisa ser baixada diretamente.
+	var (
+		data []byte
+		err  error
+	)
+	if kind == "ptv" {
+		data, err = m.client.Download(ctx, msg.GetPtvMessage())
+	} else {
+		data, err = m.client.DownloadAny(ctx, msg)
+	}
 	if err != nil {
 		m.client.Log.Warnf("falha ao baixar mídia: %v", err)
 		return payload

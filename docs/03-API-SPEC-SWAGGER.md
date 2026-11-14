@@ -231,3 +231,34 @@ Teste ponta a ponta executado com uma conta **WhatsApp Business** pareada como c
 
 Achados corrigidos nesta rodada: reconexão que não reconectava, eventos de protocolo publicados como `unknown`,
 identidade `@lid` não traduzida para número e falha de boot tocando na sessão do WhatsApp.
+## 13. Tipos de Mensagem Suportados
+
+| Mensagem | `message_type` | Observações |
+| :--- | :--- | :--- |
+| Texto (simples e estendido) | `text` | inclui citação (`reply_to_id`) |
+| Imagem | `image` | legenda preservada |
+| Vídeo | `video` | inclui GIF (`is_animated`) |
+| **Vídeo-nota (PTV)** | `video` | ver armadilha abaixo |
+| Áudio / nota de voz | `audio` | `is_ptt` indica nota de voz |
+| Documento | `document` | nome do arquivo preservado |
+| Figurinha | `sticker` | animada ou estática |
+| Localização | `location` | estática e **em tempo real** |
+| Contato | `contact` | individual e lista de contatos |
+| Botão / lista respondidos | `button_reply`, `list_reply` | inclui resposta NativeFlow |
+| Enquete e voto | `poll`, `poll_vote` | voto chega decifrado (seção 10) |
+| Reação | `reaction` | **inclusive cifrada** (`EncReactionMessage`) |
+| Revogação | `revoke` | `target_message_id` |
+| Qualquer outra coisa | — | descartada, com registro em `debug` |
+
+Mensagens de protocolo (sincronização de histórico, app state, chaves de grupo) e tipos
+ainda não mapeados **não são publicadas**: o normalizador registra
+`mensagem ignorada por tipo não mapeado` em nível `debug` para que um tipo novo
+apareça no log em vez de desaparecer em silêncio.
+
+### Armadilha do vídeo-nota
+
+O `whatsmeow` guarda o vídeo-nota no campo `PtvMessage`, e o helper `client.DownloadAny`
+**não o reconhece** (só procura `ImageMessage`, `VideoMessage`, `AudioMessage`,
+`DocumentMessage` e `StickerMessage`). Usar `DownloadAny` resulta em
+`didn't find any attachments in message`. Por isso o normalizador baixa o PTV com
+`client.Download(ctx, msg.GetPtvMessage())` diretamente.
