@@ -5,7 +5,7 @@ Gateway pessoal de **WhatsApp (`tulir/whatsmeow`)** em **Go**, estruturado de fo
 2. **`apps/mcp`**: Servidor **MCP (Model Context Protocol)** independente (`stdio` / `SSE`) para conectar seu WhatsApp ao **OpenClaw**, **Moltbot**, **Hermes Agent**, **Agent Zero** e clientes compatíveis.
 3. **`shared/contracts`**: DTOs e contratos únicos compartilhados entre a API REST e o Servidor MCP.
 
-> **Status Atual:** Projeto na fase **S1 — Contratos e OpenAPI** (DTOs em `shared/contracts` e especificação OpenAPI 3.1 criados; a implementação do daemon (`apps/api` + `apps/mcp`) está prevista para a fase **S2**).
+> **Status Atual:** Projeto na fase **S2 — Daemon da API** (contratos e OpenAPI do S1 concluídos; `apps/api` já sobe com autenticação por chave, documentação em `/docs`, healthcheck e endpoints de sessão: status, QR Code, código de pareamento, reconexão e logout). As fases **S3** (mensagens e webhooks), **S4** (grupos e interatividade) e **S5** (servidor MCP) estão pendentes.
 
 ---
 

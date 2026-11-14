@@ -4,18 +4,21 @@
 
 ---
 
-## 1. Como funciona a Documentação Automática em Go
+## 1. Como funciona a Documentação da API
 
-Em vez de escrever documentação manualmente e correr o risco de ela ficar desatualizada, a API REST em Go usará **geração automática a partir das structs e metadados das rotas**:
+A API usa **Huma v2 (`github.com/danielgtaylor/huma/v2`) + Chi (`go-chi/chi/v5`)** para roteamento, binding e validação de entrada. A documentação segue uma regra explícita para não haver drift:
 
-### Stack Recomendada: **Huma v2 (`github.com/danielgtaylor/huma/v2`) + Chi (`go-chi/chi/v5`)**
-Por que o **Huma v2** é considerado o "FastAPI do Go"?
-1. Você declara a struct de entrada/saída uma única vez (ex: `shared/contracts/messages.go`) com tags como `doc:"..."`, `example:"..."`, `required:"true"`, `enum:"add,remove,promote,demote"`.
-2. O Huma valida automaticamente o JSON de entrada, retorna erros padronizados (RFC 9457 Problem Details) e **gera automaticamente**:
-   - `GET /openapi.json` e `GET /openapi.yaml` (especificação OpenAPI 3.1 completa);
-   - `GET /docs` (interface interativa bonita via **Scalar UI**, com opção de servir também **Swagger UI** clássica em `/swagger`), onde você pode **testar todas as rotas e botões direto pelo navegador**.
+1. **A especificação publicada é curada e versionada** em [`openapi.yaml`](openapi.yaml) — é ela que responde em `GET /openapi.json` e `GET /openapi.yaml`, e é ela que o `/docs` renderiza.
+2. **O Huma valida em runtime** usando as structs de `shared/contracts`, que carregam `doc:"..."`, `required:"true"`, `enum:"..."`, `maxItems:"..."` etc.
+3. **Testes travam a paridade**: `apps/api/internal/http/openapi_test.go` compara a especificação com o mapa de rotas e `shared/contracts/contracts_test.go` exige `doc` em todo campo exportado. Se o código e a especificação divergirem, o CI quebra.
 
-*(Alternativa compatível caso prefira anotação via comentários: `swaggo/swag` + `http-swagger`, que gera o arquivo `swagger.json` a partir de comentários `// @Summary`, `// @Param`, `// @Success`).*
+Por que não gerar a especificação automaticamente: as descrições em português, os exemplos e as restrições negociadas nas fases de contrato seriam substituídas pelo texto mínimo derivado das tags. Mantendo o arquivo curado como fonte publicada e um teste de paridade, ganhamos documentação rica **e** garantia de sincronia.
+
+- `GET /docs` — interface interativa (Scalar UI) apontando para `/openapi.json`;
+- `GET /openapi.json` e `GET /openapi.yaml` — a especificação OpenAPI 3.1 publicada;
+- `GET /health` — healthcheck, sem autenticação.
+
+> Se `GABE_WHATS_OPENAPI_PATH` não estiver legível no boot, a API serve a especificação gerada pelo Huma como fallback e registra um aviso.
 
 ---
 

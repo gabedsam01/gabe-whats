@@ -1,15 +1,41 @@
 # `apps/api` — Daemon REST & Gateway `whatsmeow`
 
-Este serviço é o **único dono** da sessão do WhatsApp e dos arquivos SQLite locais: o `session.db` do `whatsmeow` (estado criptográfico Signal) e um `app.db` próprio (`GABE_WHATS_APP_DSN`, para cache de enquetes e configuração de webhooks). Ele permanece rodando em background para manter o WebSocket conectado, servir a API REST + documentação automática (`/docs`) e despachar eventos em tempo real para os agentes via **Webhook HTTP POST** e **SSE**.
+Este serviço é o **único dono** da sessão do WhatsApp e dos arquivos SQLite locais: o `session.db` do `whatsmeow` (estado criptográfico Signal) e um `app.db` próprio (`GABE_WHATS_APP_DSN`, para cache de enquetes e configuração de webhooks). Ele permanece rodando em background para manter o WebSocket conectado, servir a API REST com documentação (`/docs`) e — a partir do S3 — despachar eventos para os agentes via **Webhook HTTP POST** e **SSE**.
 
-## Camadas (estado atual — S1: apenas blueprints)
+## Camadas (estado atual — S2)
 
-| Diretório | Responsabilidade | Estado |
+| Diretório / arquivo | Responsabilidade | Estado |
 | :--- | :--- | :--- |
-| `cmd/server/` | Bootstrap da aplicação (carrega `.env`, inicializa `sqlstore` + `whatsmeow.Client`, sobe servidor HTTP e trata graceful shutdown). | Blueprint em `main.go` (ciclo de vida descrito em comentários); implementação em S2. |
-| `internal/config/` | Parsing e validação das variáveis de ambiente reais (`GABE_WHATS_HTTP_ADDR`, `GABE_WHATS_API_KEY`, `GABE_WHATS_SQLITE_DSN`, `GABE_WHATS_APP_DSN`, `GABE_WHATS_MEDIA_URL_TTL`, `GABE_WHATS_WEBHOOK_URL`, etc. — ver [`.env.example`](../../.env.example)). | Planejado (S2). |
-| `internal/whatsapp/` | Wrapper sobre `go.mau.fi/whatsmeow` (conexão, QR/PairCode, envio de texto/mídia/PTT, botões com `<biz>`, enquetes, grupos e download de mídia). | Interface `Service` + tipos em `blueprint.go`; implementação em S2. |
-| `internal/http/` | Mapa de rotas REST com geração automática de **OpenAPI 3.1 + Scalar/Swagger UI** em `/docs`, `/openapi.json` e `/openapi.yaml`. | `router.go` com `PlannedRoutes`; handlers/middleware em S2. |
-| `internal/http/middleware/` | Autenticação por `X-API-Key` / `Authorization: Bearer`, CORS local, logging estruturado e rate-limit leve. | Planejado (S2). |
-| `internal/http/handlers/` | Handlers REST registrados no router (Huma v2 + Chi) a partir dos DTOs de `shared/contracts`. | Planejado (S2). |
-| `internal/webhook/` | Normalizador de `*events.Message` / `*events.GroupInfo` para `contracts.WebhookInboundEvent`, fila assíncrona de entrega POST com assinatura HMAC e hub SSE. | Planejado (S2). |
+| [`cmd/server/main.go`](cmd/server/main.go) | Bootstrap: carrega configuração, abre a sessão, sobe o HTTP e trata encerramento gracioso. | **Implementado** |
+| [`internal/config/config.go`](internal/config/config.go) | Parsing e validação das variáveis de ambiente (com `.env` opcional). | **Implementado** + testes |
+| [`internal/whatsapp/manager.go`](internal/whatsapp/manager.go) | Conexão, status, QR Code, código de pareamento, reconexão e logout. | **Implementado** + testes de sessão via HTTP |
+| [`internal/whatsapp/blueprint.go`](internal/whatsapp/blueprint.go) | Interface `Service` para envio de mensagens, mídias e grupos. | Interface definida; implementação em S3/S4 |
+| [`internal/http/server.go`](internal/http/server.go) | Chi + Huma, autenticação por chave, `/health`, `/docs` e spec publicada. | **Implementado** |
+| [`internal/http/errors.go`](internal/http/errors.go) | Erros no padrão RFC 9457 (`application/problem+json`). | **Implementado** |
+| [`internal/http/session.go`](internal/http/session.go) | Endpoints de sessão e pareamento. | **Implementado** |
+| [`internal/http/router.go`](internal/http/router.go) | `PlannedRoutes`: mapa de rotas que serve de contrato para os testes. | **Implementado** |
+| `internal/http/handlers/` e `internal/http/middleware/` | Subdiretórios previstos no desenho. | Não foram necessários: handlers e autenticação vivem em `internal/http` por enquanto |
+| `internal/webhook/` | Normalizador de eventos, fila de entrega com HMAC e hub SSE. | Planejado (S3) |
+
+## Como rodar
+
+```bash
+cp .env.example .env          # ajuste GABE_WHATS_API_KEY (mínimo 16 caracteres)
+go run ./apps/api/cmd/server
+```
+
+- Documentação interativa: <http://127.0.0.1:8080/docs>
+- Especificação: `/openapi.json` e `/openapi.yaml`
+- Healthcheck (sem autenticação): `/health`
+- Todas as rotas `/api/v1/*` exigem `X-API-Key` ou `Authorization: Bearer`.
+
+Primeiro pareamento:
+
+```bash
+curl -H "X-API-Key: $GABE_WHATS_API_KEY" http://127.0.0.1:8080/api/v1/session/qr   # leia o QR
+# ou, sem câmera:
+curl -X POST -H "X-API-Key: $GABE_WHATS_API_KEY" -H 'Content-Type: application/json' \
+     -d '{"phone":"5511999999999"}' http://127.0.0.1:8080/api/v1/session/pair-code
+```
+
+Fechar o processo encerra a conexão via `SIGINT`/`SIGTERM` sem corromper o `session.db`.

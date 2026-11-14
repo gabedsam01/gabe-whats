@@ -18,11 +18,12 @@ O **`gabe-whats`** é um gateway pessoal de **WhatsApp** construído em **Go (`g
    - **`apps/api`** é o único módulo que importa `go.mau.fi/whatsmeow`, abre o SQLite de sessão (`session.db`), mantém o WebSocket com o WhatsApp, baixa mídias e dispara Webhooks/SSE.
    - **`apps/mcp`** é **stateless** e **NUNCA** deve importar `whatsmeow` nem abrir o SQLite diretamente. Toda operação do servidor MCP deve passar por chamadas HTTP REST à `apps/api` usando `GABE_WHATS_API_URL` e `GABE_WHATS_API_KEY`.
 2. **Fonte única de contratos (`shared/contracts`):**
-   - Todos os DTOs de request/response e eventos de webhook residem em `shared/contracts/` (`messages.go`, `groups.go`, `webhooks.go`).
+   - Todos os DTOs de request/response e eventos de webhook residem em `shared/contracts/` (`common.go`, `session.go`, `contacts.go`, `messages.go`, `groups.go`, `webhooks.go`).
    - Ao alterar ou criar endpoints/tools, atualize primeiro as structs em `shared/contracts/` para manter `apps/api`, `apps/mcp` e a documentação OpenAPI sincronizados.
-3. **Documentação Automática de API (`/docs`):**
-   - A API REST deve usar geração OpenAPI 3.1 automatizada a partir das structs/rotas (**Huma v2 + Chi** é o padrão definido em `docs/03-API-SPEC-SWAGGER.md`), servindo `/docs` (Scalar/Swagger UI) e `/openapi.yaml` / `/openapi.json`.
-   - Toda struct em `shared/contracts/` deve manter tags `json`, `doc`, `enum` e `required` atualizadas.
+3. **Documentação da API (`/docs`) e contratos:**
+   - O Huma v2 + Chi é o runtime (roteamento, binding e validação). A especificação **publicada** em `docs/openapi.yaml` é curada e servida em `/openapi.yaml`, `/openapi.json` e `/docs` (Scalar UI).
+   - A paridade é garantida por teste (`apps/api/internal/http/openapi_test.go` compara a spec com as rotas registradas; `shared/contracts/contracts_test.go` exige `doc` em todo campo exportado). **Toda rota ou campo novo exige atualizar a spec no mesmo commit** — o CI quebra caso contrário.
+   - Toda struct em `shared/contracts/` deve manter tags `json`, `doc`, `enum`, `required` (somente requests) e limites (`maxItems`, `maxLength`) atualizadas.
 4. **Protocolo `whatsmeow` & Casos Especiais:**
    - **Botões e Listas (`SendButtons`, `SendList`):** No protocolo Multi-Device, mensagens interativas (`InteractiveMessage`/`NativeFlowMessage` e `ListMessage`) requerem atenção aos nós binários adicionais (`SendRequestExtra.AdditionalNodes` com `<biz>`). Mantenha **Enquetes (`BuildPollCreation` / `DecryptPollVote`)** como alternativa nativa 100% garantida para contas pessoais.
    - **Recebimento de Eventos:** Todo evento `*events.Message` recebido via `AddEventHandler` deve ser normalizado para `contracts.WebhookInboundEvent` (desembrulhando texto, baixando mídia/áudio PTT via `DownloadAny` quando habilitado, extraindo clique de botão e descriptografando votos de enquete via `DecryptPollVote`).
@@ -50,7 +51,8 @@ Antes de implementar ou modificar qualquer componente, leia a documentação cor
 
 ## 4. Convenções de Trabalho & Verificação
 
-- **Estado atual do repositório:** Apenas arquitetura, pesquisa, contratos e blueprints estão criados. Não adicione dependências pesadas nem lógica completa fora do escopo pedido sem alinhamento prévio.
+- **Estado atual do repositório:** Fases S1 (contratos + OpenAPI) e S2 (daemon da API) concluídas. `apps/api` já sobe com autenticação por `X-API-Key`/`Bearer`, `/docs`, `/health` e endpoints de sessão; `apps/mcp` continua blueprint até o S5. Não adicione dependências pesadas nem lógica completa fora do escopo pedido sem alinhamento prévio.
+- **Comandos obrigatórios antes de concluir:** `gofmt -l .` (vazio), `go vet ./...` e `go test ./...`. O alvo `make check` roda todos.
 - **Idioma:** Documentação, comentários de descrição OpenAPI (`doc:"..."`) e mensagens orientadas ao usuário devem ser escritos em **português (pt-BR)**; identificadores Go, nomes de campos JSON e símbolos seguem **inglês** padrão idiomático Go.
 - **Antes de concluir mudanças em código Go:** Execute `gofmt -l .` (e `go test ./...` / `go vet ./...` após os módulos `go.mod` serem inicializados).
 - **Segredos:** Nunca commite `.env`, tokens reais ou arquivos `.db`/chaves Signal de sessão (`session.db`, `data/`).

@@ -1,40 +1,101 @@
-// Blueprint do entrypoint da API REST (`apps/api`).
-// Este arquivo representa o desenho arquitetural do ciclo de vida do servidor.
-// A implementação completa será adicionada após aprovação da fase de arquitetura.
+// Command server inicializa o daemon da API REST: carrega a configuração,
+// abre a sessão do WhatsApp, sobe o servidor HTTP com documentação e trata o
+// encerramento gracioso.
 package main
 
 import (
 	"context"
-	"log"
+	"errors"
+	"log/slog"
+	"net/http"
+	"os"
 	"os/signal"
+	"strings"
 	"syscall"
+	"time"
+
+	"github.com/gabedsam01/gabe-whats/apps/api/internal/config"
+	httpapi "github.com/gabedsam01/gabe-whats/apps/api/internal/http"
+	"github.com/gabedsam01/gabe-whats/apps/api/internal/whatsapp"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func main() {
+	if err := run(); err != nil {
+		slog.Error("encerrando com erro", "erro", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Passo 1 (Config): carregar apps/api/internal/config
-	//   - HTTPAddr (ex: 127.0.0.1:8080)
-	//   - APIKey (para proteger todas as rotas /api/v1/*)
-	//   - SQLiteDSN (ex: file:./data/session.db?_foreign_keys=on)
-	//   - WebhookConfig (URL, Secret, IgnoreFromMe, AllowJIDs, AutoDownloadMedia)
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
 
-	// Passo 2 (WhatsApp Store & Client): inicializar whatsmeow via internal/whatsapp
-	//   - container, err := sqlstore.New(ctx, "sqlite3", cfg.SQLiteDSN, logger)
-	//   - deviceStore, err := container.GetFirstDevice(ctx)
-	//   - client := whatsmeow.NewClient(deviceStore, logger)
+	setupLogger(cfg.LogLevel)
+	slog.Info("iniciando gabe-whats", "versao", httpapi.Version, "endereco", cfg.HTTPAddr)
 
-	// Passo 3 (Event Handler -> Webhook/SSE): registrar client.AddEventHandler(...)
-	//   - Desembrulhar *events.Message (texto, mídia via DownloadAny, clique de botão, voto via DecryptPollVote)
-	//   - Publicar WebhookInboundEvent para internal/webhook (POST assíncrono + SSE stream)
+	if !cfg.IsLoopback() {
+		slog.Warn("a API está escutando em endereço não local", "endereco", cfg.HTTPAddr)
+	}
 
-	// Passo 4 (Conexão): se deviceStore.ID != nil -> client.Connect()
-	//   - Caso contrário, aguarda chamada em GET /api/v1/session/qr ou POST /api/v1/session/pair-code
+	wa, err := whatsapp.New(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer wa.Close()
 
-	// Passo 5 (HTTP + Auto-Docs /docs): registrar internal/http/router.go
-	//   - Huma v2 + Chi expondo /api/v1/*, /openapi.json, /openapi.yaml e /docs (Scalar / Swagger UI)
+	server := httpapi.New(cfg, wa)
 
-	<-ctx.Done()
-	log.Println("Blueprint gabe-whats API: encerrando graciosamente (client.Disconnect)")
+	httpServer := &http.Server{
+		Addr:              cfg.HTTPAddr,
+		Handler:           server.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+
+	listenErr := make(chan error, 1)
+	go func() {
+		slog.Info("API disponível", "docs", "http://"+cfg.HTTPAddr+"/docs", "openapi", "http://"+cfg.HTTPAddr+"/openapi.yaml")
+		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			listenErr <- err
+		}
+	}()
+
+	select {
+	case err := <-listenErr:
+		return err
+	case <-ctx.Done():
+		slog.Info("sinal recebido; encerrando graciosamente")
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		slog.Warn("encerramento do servidor HTTP incompleto", "erro", err)
+	}
+	return nil
+}
+
+// setupLogger configura o slog com o nível vindo da configuração.
+func setupLogger(level string) {
+	var lvl slog.Level
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "debug":
+		lvl = slog.LevelDebug
+	case "warn", "warning":
+		lvl = slog.LevelWarn
+	case "error":
+		lvl = slog.LevelError
+	default:
+		lvl = slog.LevelInfo
+	}
+	handler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: lvl})
+	slog.SetDefault(slog.New(handler))
 }

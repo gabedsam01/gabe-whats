@@ -139,3 +139,4 @@ Veja o modelo pronto em [`mcp-config.example.json`](file:///home/gabedsam01/meus
 ### Guardrails Recomendados para Uso Pessoal com Agentes
 - **`WEBHOOK_ALLOW_JIDS` / `WEBHOOK_IGNORE_FROM_ME`:** Evita que o agente responda a desconhecidos ou entre em loop infinito respondendo às próprias mensagens.
 - **Modo "Self-Chat" opcional:** Permite conversar com o seu agente enviando mensagens no chat com o seu próprio número ou em um grupo privado dedicado.
+  - **Atenção (decisão do projeto):** com `GABE_WHATS_WEBHOOK_IGNORE_FROM_ME=true` (padrão), **o Modo Self-Chat não recebe eventos**, porque no chat consigo mesmo toda mensagem é `is_from_me=true`. Para usar self-chat é preciso desligar o filtro e aceitar o risco de loop — a mitigação recomendada é responder apenas a comandos com prefixo (ex.: `/agente ...`) no handler do agente.
