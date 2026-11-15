@@ -14,6 +14,7 @@ import (
 
 	"github.com/gabedsam01/gabe-whats/apps/api/internal/appstore"
 	"github.com/gabedsam01/gabe-whats/apps/api/internal/config"
+	"github.com/gabedsam01/gabe-whats/apps/api/internal/human"
 	"github.com/gabedsam01/gabe-whats/shared/contracts"
 	qrcode "github.com/skip2/go-qrcode"
 	"go.mau.fi/whatsmeow"
@@ -60,6 +61,9 @@ type Manager struct {
 	publisher Publisher
 	media     MediaSink
 	app       *appstore.Store
+
+	human *human.Profile
+	pacer *human.Pacer
 
 	pairMu sync.Mutex
 	pair   *pairingState
@@ -115,6 +119,7 @@ func New(ctx context.Context, cfg *config.Config, publisher Publisher, mediaSink
 	}
 
 	client := whatsmeow.NewClient(device, logger)
+	profile := human.NewProfile(cfg.Human.Enabled, cfg.Human.CharsPerSecond, cfg.Human.MinGap, cfg.Human.MaxGap, cfg.Human.MaxTyping, 0)
 	m := &Manager{
 		client:    client,
 		container: container,
@@ -123,6 +128,8 @@ func New(ctx context.Context, cfg *config.Config, publisher Publisher, mediaSink
 		publisher: publisher,
 		media:     mediaSink,
 		app:       app,
+		human:     profile,
+		pacer:     human.NewPacer(profile),
 	}
 	client.AddEventHandler(m.handleEvent)
 

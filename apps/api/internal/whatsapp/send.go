@@ -72,9 +72,7 @@ func (m *Manager) SendText(ctx context.Context, req contracts.SendTextRequest) (
 		return nil, invalidInput(errors.New("texto vazio"))
 	}
 
-	if req.SimulateTypingMs > 0 {
-		m.simulateTyping(ctx, to, time.Duration(req.SimulateTypingMs)*time.Millisecond)
-	}
+	m.prepareSend(ctx, to, req.Text, req.SimulateTypingMs, types.ChatPresenceMediaText)
 
 	msg := &waE2E.Message{}
 	mentions := make([]string, 0, len(req.Mentions))
@@ -103,7 +101,7 @@ func (m *Manager) SendText(ctx context.Context, req contracts.SendTextRequest) (
 		}
 	}
 
-	resp, err := m.client.SendMessage(ctx, to, msg)
+	resp, err := m.sendWithRetry(ctx, to, msg)
 	if err != nil {
 		return nil, fmt.Errorf("enviar texto: %w", err)
 	}
@@ -185,7 +183,9 @@ func (m *Manager) SendMedia(ctx context.Context, req contracts.SendMediaRequest)
 		applyReply(msg, req.ReplyToID, to)
 	}
 
-	resp, err := m.client.SendMessage(ctx, to, msg)
+	m.prepareSend(ctx, to, req.Caption, 0, types.ChatPresenceMediaText)
+
+	resp, err := m.sendWithRetry(ctx, to, msg)
 	if err != nil {
 		return nil, fmt.Errorf("enviar mídia: %w", err)
 	}
@@ -228,7 +228,9 @@ func (m *Manager) SendVoice(ctx context.Context, req contracts.SendVoiceRequest)
 		applyReply(msg, req.ReplyToID, to)
 	}
 
-	resp, err := m.client.SendMessage(ctx, to, msg)
+	m.prepareSend(ctx, to, "", 0, types.ChatPresenceMediaAudio)
+
+	resp, err := m.sendWithRetry(ctx, to, msg)
 	if err != nil {
 		return nil, fmt.Errorf("enviar áudio: %w", err)
 	}
@@ -253,16 +255,87 @@ func applyReply(msg *waE2E.Message, replyTo string, to types.JID) {
 	}
 }
 
-// simulateTyping publica "digitando..." e encerra após a duração pedida.
-func (m *Manager) simulateTyping(ctx context.Context, to types.JID, duration time.Duration) {
-	if err := m.client.SendChatPresence(ctx, to, types.ChatPresenceComposing, types.ChatPresenceMediaText); err != nil {
+// prepareSend aplica o ritmo humano: espera a vez da conversa e publica
+// "digitando..." (ou "gravando áudio") pelo tempo estimado.
+//
+// overrideMs: > 0 usa a duração informada; < 0 desliga o indicador; 0 usa a
+// estimativa do perfil configurado.
+func (m *Manager) prepareSend(ctx context.Context, to types.JID, text string, overrideMs int, media types.ChatPresenceMedia) {
+	if m.pacer != nil {
+		if err := m.pacer.Wait(ctx, to.String()); err != nil {
+			return
+		}
+	}
+
+	delay := time.Duration(0)
+	switch {
+	case overrideMs < 0:
+		return
+	case overrideMs > 0:
+		delay = time.Duration(overrideMs) * time.Millisecond
+	case m.human != nil:
+		delay = m.human.TypingDelay(text)
+	}
+	if delay <= 0 {
 		return
 	}
+	m.simulateTyping(ctx, to, delay, media)
+}
+
+// simulateTyping publica "digitando..." e encerra após a duração pedida.
+func (m *Manager) simulateTyping(ctx context.Context, to types.JID, duration time.Duration, media types.ChatPresenceMedia) {
+	if err := m.client.SendChatPresence(ctx, to, types.ChatPresenceComposing, media); err != nil {
+		return
+	}
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
 	select {
-	case <-time.After(duration):
+	case <-timer.C:
 	case <-ctx.Done():
 	}
-	_ = m.client.SendChatPresence(ctx, to, types.ChatPresencePaused, types.ChatPresenceMediaText)
+	_ = m.client.SendChatPresence(ctx, to, types.ChatPresencePaused, media)
+}
+
+// sendWithRetry repete o envio em erro transitório, com espera exponencial e
+// jitter. Sem humanização, faz uma única tentativa.
+func (m *Manager) sendWithRetry(ctx context.Context, to types.JID, msg *waE2E.Message, extra ...whatsmeow.SendRequestExtra) (whatsmeow.SendResponse, error) {
+	attempts := 1
+	if m.human != nil && m.human.Enabled {
+		attempts = 3
+	}
+
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		resp, err := m.client.SendMessage(ctx, to, msg, extra...)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+
+		if attempt == attempts || !retryableSendError(err) {
+			break
+		}
+
+		timer := time.NewTimer(m.human.Backoff(attempt))
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return whatsmeow.SendResponse{}, ctx.Err()
+		}
+	}
+	return whatsmeow.SendResponse{}, lastErr
+}
+
+// retryableSendError identifica falha transitória do servidor do WhatsApp.
+func retryableSendError(err error) bool {
+	message := strings.ToLower(err.Error())
+	for _, needle := range []string{"429", "500", "502", "503", "504", "timeout", "connection reset", "unexpected eof", "broken pipe"} {
+		if strings.Contains(message, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 // messageResponse converte a resposta do whatsmeow no contrato compartilhado.

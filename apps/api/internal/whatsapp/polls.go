@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"strings"
 
 	"github.com/gabedsam01/gabe-whats/apps/api/internal/appstore"
 	"github.com/gabedsam01/gabe-whats/shared/contracts"
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 )
 
@@ -32,7 +34,10 @@ func (m *Manager) SendPoll(ctx context.Context, req contracts.SendPollRequest) (
 	}
 
 	message := m.client.BuildPollCreation(req.Question, req.Options, selections)
-	resp, err := m.client.SendMessage(ctx, to, message)
+
+	m.prepareSend(ctx, to, req.Question+" "+strings.Join(req.Options, " "), 0, types.ChatPresenceMediaText)
+
+	resp, err := m.sendWithRetry(ctx, to, message)
 	if err != nil {
 		return nil, fmt.Errorf("enviar enquete: %w", err)
 	}

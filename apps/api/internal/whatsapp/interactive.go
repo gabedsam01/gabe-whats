@@ -60,6 +60,8 @@ func (m *Manager) SendButtons(ctx context.Context, req contracts.SendButtonsRequ
 		},
 	}
 
+	m.prepareSend(ctx, to, req.Body, 0, types.ChatPresenceMediaText)
+
 	resp, err := m.sendWithBizNode(ctx, to, &waE2E.Message{InteractiveMessage: interactive})
 	if err != nil {
 		return nil, interactiveSendError("enviar botões", err)
@@ -98,6 +100,8 @@ func (m *Manager) SendList(ctx context.Context, req contracts.SendListRequest) (
 		list.FooterText = proto.String(req.Footer)
 	}
 
+	m.prepareSend(ctx, to, req.Title+" "+req.Description, 0, types.ChatPresenceMediaText)
+
 	resp, err := m.sendWithBizNode(ctx, to, &waE2E.Message{ListMessage: list})
 	if err != nil {
 		return nil, interactiveSendError("enviar lista", err)
@@ -116,11 +120,7 @@ func (m *Manager) sendWithBizNode(ctx context.Context, to types.JID, msg *waE2E.
 			Content: []waBinary.Node{{Tag: "native_flow", Attrs: waBinary.Attrs{"name": "mixed"}}},
 		}},
 	}}
-	resp, err := m.client.SendMessage(ctx, to, msg, whatsmeow.SendRequestExtra{AdditionalNodes: &nodes})
-	if err != nil {
-		return whatsmeow.SendResponse{}, err
-	}
-	return resp, nil
+	return m.sendWithRetry(ctx, to, msg, whatsmeow.SendRequestExtra{AdditionalNodes: &nodes})
 }
 
 // quickReplyParams são os ButtonParamsJSON do botão quick_reply.

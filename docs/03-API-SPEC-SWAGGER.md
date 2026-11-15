@@ -277,3 +277,40 @@ O WhatsApp entrega um álbum como **várias mensagens de mídia independentes**,
 seu próprio `message_id`. Não existe agrupamento no envelope que chega (o `AlbumMessage`
 não carrega os filhos). Na prática: 6 fotos enviadas juntas geram 6 eventos `image`
 distintos, todos com download próprio.
+## 14. Ritmo Humano (anti-assinatura de bot)
+
+O gateway não envia instantaneamente. O princípio vem do combate a anti-bot em scraping:
+**"bot é regular, pessoa mexendo é irregular"** — o que um servidor consegue medir com
+facilidade não é o conteúdo, é o **tempo**.
+
+Das camadas daquele contexto, apenas a de velocidade tem análogo aqui: cabeçalho, TLS,
+proxy e browser fazem sentido para HTTP, não para o protocolo WhatsApp, onde a identidade
+já é o dispositivo pareado.
+
+### O que é aplicado
+
+| Mecanismo | Comportamento |
+| :--- | :--- |
+| Indicador "digitando..." | Proporcional ao texto (~6 caracteres/s) com ±35% de variação, mínimo 600 ms e teto de 8 s |
+| Intervalo por conversa | 1,2 s a 3,5 s sorteados entre duas mensagens para o mesmo chat; conversas diferentes não se esperam |
+| Nota de voz | Presença de "gravando áudio" em vez de "digitando" |
+| Retry | Até 3 tentativas em erro transitório (429/5xx/timeout), com espera exponencial e jitter |
+
+### Configuração
+
+```bash
+GABE_WHATS_HUMANIZE=true      # liga/desliga
+GABE_WHATS_TYPING_CPS=6       # caracteres por segundo
+GABE_WHATS_SEND_GAP_MIN=1200ms
+GABE_WHATS_SEND_GAP_MAX=3500ms
+GABE_WHATS_TYPING_MAX=8s
+```
+
+### Efeitos colaterais (esperados)
+
+O tempo faz parte do contrato e acontece **dentro da requisição**: o indicador é limitado
+por `GABE_WHATS_TYPING_MAX` (8 s por padrão) e soma-se ao intervalo da conversa, então um
+texto curto leva cerca de 1 s e um texto longo chega ao teto de ~11 s. Quem precisa de
+velocidade desliga a humanização
+(`GABE_WHATS_HUMANIZE=false`) ou, em `POST /messages/text`, envia
+`simulate_typing_ms` negativo para pular o indicador daquela mensagem.

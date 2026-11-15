@@ -16,6 +16,11 @@ func setValidEnv(t *testing.T) {
 	t.Setenv("GABE_WHATS_WEBHOOK_IGNORE_FROM_ME", "")
 	t.Setenv("GABE_WHATS_AUTO_DOWNLOAD_MEDIA", "")
 	t.Setenv("GABE_WHATS_WEBHOOK_INCLUDE_BASE64", "")
+	t.Setenv("GABE_WHATS_HUMANIZE", "")
+	t.Setenv("GABE_WHATS_TYPING_CPS", "")
+	t.Setenv("GABE_WHATS_SEND_GAP_MIN", "")
+	t.Setenv("GABE_WHATS_SEND_GAP_MAX", "")
+	t.Setenv("GABE_WHATS_TYPING_MAX", "")
 }
 
 func TestLoadAppliesDefaults(t *testing.T) {
@@ -143,5 +148,63 @@ func TestIsLoopback(t *testing.T) {
 		if got := cfg.IsLoopback(); got != want {
 			t.Errorf("IsLoopback(%q) = %v; esperado %v", addr, got, want)
 		}
+	}
+}
+func TestLoadHumanDefaults(t *testing.T) {
+	setValidEnv(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() devolveu erro inesperado: %v", err)
+	}
+
+	if !cfg.Human.Enabled {
+		t.Error("Human.Enabled deveria ser true por padrão")
+	}
+	if cfg.Human.CharsPerSecond != defaultHumanCharsPerSecond {
+		t.Errorf("CharsPerSecond = %v; esperado %v", cfg.Human.CharsPerSecond, defaultHumanCharsPerSecond)
+	}
+	if cfg.Human.MinGap != defaultHumanMinGap || cfg.Human.MaxGap != defaultHumanMaxGap {
+		t.Errorf("gaps = %v/%v; esperado %v/%v", cfg.Human.MinGap, cfg.Human.MaxGap, defaultHumanMinGap, defaultHumanMaxGap)
+	}
+	if cfg.Human.MaxTyping != defaultHumanMaxTyping {
+		t.Errorf("MaxTyping = %v; esperado %v", cfg.Human.MaxTyping, defaultHumanMaxTyping)
+	}
+}
+
+func TestLoadHumanOverrides(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv("GABE_WHATS_HUMANIZE", "false")
+	t.Setenv("GABE_WHATS_TYPING_CPS", "9.5")
+	t.Setenv("GABE_WHATS_SEND_GAP_MIN", "2s")
+	t.Setenv("GABE_WHATS_SEND_GAP_MAX", "6s")
+	t.Setenv("GABE_WHATS_TYPING_MAX", "12s")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() devolveu erro inesperado: %v", err)
+	}
+
+	if cfg.Human.Enabled {
+		t.Error("Human.Enabled deveria ser false")
+	}
+	if cfg.Human.CharsPerSecond != 9.5 {
+		t.Errorf("CharsPerSecond = %v", cfg.Human.CharsPerSecond)
+	}
+	if cfg.Human.MinGap != 2*time.Second || cfg.Human.MaxGap != 6*time.Second {
+		t.Errorf("gaps = %v/%v", cfg.Human.MinGap, cfg.Human.MaxGap)
+	}
+	if cfg.Human.MaxTyping != 12*time.Second {
+		t.Errorf("MaxTyping = %v", cfg.Human.MaxTyping)
+	}
+}
+
+func TestLoadRejectsInvalidHumanGap(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv("GABE_WHATS_SEND_GAP_MIN", "5s")
+	t.Setenv("GABE_WHATS_SEND_GAP_MAX", "1s")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("esperava erro de validação para gap invertido")
 	}
 }

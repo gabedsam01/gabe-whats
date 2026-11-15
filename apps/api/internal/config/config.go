@@ -24,6 +24,11 @@ const (
 	defaultLogLevel    = "info"
 	defaultOpenAPI     = "docs/openapi.yaml"
 	placeholderAPIKey  = "troque-por-sua-chave-secreta"
+
+	defaultHumanCharsPerSecond = 6.0
+	defaultHumanMinGap         = 1200 * time.Millisecond
+	defaultHumanMaxGap         = 3500 * time.Millisecond
+	defaultHumanMaxTyping      = 8 * time.Second
 )
 
 // Webhook reúne a configuração de entrega de eventos aos agentes.
@@ -34,6 +39,16 @@ type Webhook struct {
 	AllowJIDs         []string
 	AutoDownloadMedia bool
 	IncludeBase64     bool
+}
+
+// Human controla o ritmo de envio: digitação proporcional ao texto, intervalo
+// irregular por conversa e espera entre tentativas.
+type Human struct {
+	Enabled        bool
+	CharsPerSecond float64
+	MinGap         time.Duration
+	MaxGap         time.Duration
+	MaxTyping      time.Duration
 }
 
 // Config é a configuração efetiva do daemon.
@@ -47,6 +62,7 @@ type Config struct {
 	LogLevel    string
 	OpenAPIPath string
 	Webhook     Webhook
+	Human       Human
 }
 
 // Load lê o ambiente (aplicando .env, quando existir) e devolve a configuração
@@ -75,6 +91,31 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
+	humanize, err := boolEnv("GABE_WHATS_HUMANIZE", true)
+	if err != nil {
+		return nil, err
+	}
+
+	typingCPS, err := floatEnv("GABE_WHATS_TYPING_CPS", defaultHumanCharsPerSecond)
+	if err != nil {
+		return nil, err
+	}
+
+	minGap, err := durationEnv("GABE_WHATS_SEND_GAP_MIN", defaultHumanMinGap)
+	if err != nil {
+		return nil, err
+	}
+
+	maxGap, err := durationEnv("GABE_WHATS_SEND_GAP_MAX", defaultHumanMaxGap)
+	if err != nil {
+		return nil, err
+	}
+
+	maxTyping, err := durationEnv("GABE_WHATS_TYPING_MAX", defaultHumanMaxTyping)
+	if err != nil {
+		return nil, err
+	}
+
 	cfg := &Config{
 		HTTPAddr:    stringEnv("GABE_WHATS_HTTP_ADDR", defaultHTTPAddr),
 		APIKey:      strings.TrimSpace(os.Getenv("GABE_WHATS_API_KEY")),
@@ -91,6 +132,13 @@ func Load() (*Config, error) {
 			AllowJIDs:         listEnv("GABE_WHATS_WEBHOOK_ALLOW_JIDS"),
 			AutoDownloadMedia: autoDownload,
 			IncludeBase64:     includeBase64,
+		},
+		Human: Human{
+			Enabled:        humanize,
+			CharsPerSecond: typingCPS,
+			MinGap:         minGap,
+			MaxGap:         maxGap,
+			MaxTyping:      maxTyping,
 		},
 	}
 
@@ -126,6 +174,17 @@ func (c *Config) Validate() error {
 	}
 	if strings.TrimSpace(c.HTTPAddr) == "" {
 		problems = append(problems, "GABE_WHATS_HTTP_ADDR vazia")
+	}
+	if c.Human.Enabled {
+		if c.Human.CharsPerSecond <= 0 {
+			problems = append(problems, "GABE_WHATS_TYPING_CPS deve ser positiva")
+		}
+		if c.Human.MinGap < 0 || c.Human.MaxGap < c.Human.MinGap {
+			problems = append(problems, "GABE_WHATS_SEND_GAP_MAX deve ser maior ou igual a GABE_WHATS_SEND_GAP_MIN")
+		}
+		if c.Human.MaxTyping <= 0 {
+			problems = append(problems, "GABE_WHATS_TYPING_MAX deve ser positiva")
+		}
 	}
 
 	if len(problems) > 0 {
@@ -178,6 +237,18 @@ func boolEnv(key string, fallback bool) (bool, error) {
 	v, err := strconv.ParseBool(raw)
 	if err != nil {
 		return false, fmt.Errorf("%s: valor booleano inválido %q: %w", key, raw, err)
+	}
+	return v, nil
+}
+
+func floatEnv(key string, fallback float64) (float64, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback, nil
+	}
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s: valor numérico inválido %q: %w", key, raw, err)
 	}
 	return v, nil
 }
