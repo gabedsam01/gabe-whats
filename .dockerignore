@@ -2,9 +2,9 @@
 .env
 .env.*
 !.env.example
-data/
-media/
-bin/
+/data/
+/media/
+/bin/
 *.db
 *.db-*
 *.log

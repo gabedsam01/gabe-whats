@@ -199,10 +199,10 @@ vite.config.ts.timestamp-*
 # gabe-whats — dados de runtime e sessão (NUNCA commitar)
 # ==============================================================================
 # Sessão criptográfica do whatsmeow (sqlstore) e mídia baixada
-data/
+/data/
 *.db
 *.db-shm
 *.db-wal
 session.db
-media/
+/media/
 
