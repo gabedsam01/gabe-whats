@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -76,6 +77,7 @@ type pairingState struct {
 	done    chan struct{}
 	once    sync.Once
 	err     error
+	cancel  context.CancelFunc
 }
 
 func (p *pairingState) set(resp contracts.QRCodeResponse) {
@@ -93,11 +95,24 @@ func (p *pairingState) snapshot() (contracts.QRCodeResponse, bool) {
 	return p.latest, p.hasCode
 }
 
+func (p *pairingState) isDone() bool {
+	select {
+	case <-p.done:
+		return true
+	default:
+		return false
+	}
+}
+
 func (p *pairingState) finish(err error) {
 	p.once.Do(func() {
 		p.mu.Lock()
 		p.err = err
+		cancel := p.cancel
 		p.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
 		close(p.done)
 	})
 }
@@ -175,8 +190,9 @@ func (m *Manager) Status(_ context.Context) (*contracts.SessionStatus, error) {
 }
 
 // StartPairing abre o canal de QR e conecta o cliente para pareamento. É
-// idempotente enquanto um pareamento estiver em andamento.
-func (m *Manager) StartPairing(ctx context.Context) error {
+// idempotente enquanto houver um pareamento ativo conectado, e reinicia
+// automaticamente caso o canal anterior tenha expirado ou desconectado.
+func (m *Manager) StartPairing(_ context.Context) error {
 	if m.client.Store.ID != nil && m.client.IsLoggedIn() {
 		return ErrAlreadyPaired
 	}
@@ -185,21 +201,52 @@ func (m *Manager) StartPairing(ctx context.Context) error {
 	defer m.pairMu.Unlock()
 
 	if m.pair != nil {
-		return nil
+		if !m.pair.isDone() && m.client.IsConnected() {
+			return nil
+		}
+		slog.Warn("descartando estado de pareamento expirado ou desconectado",
+			"done", m.pair.isDone(),
+			"connected", m.client.IsConnected(),
+		)
+		m.pair.finish(ErrPairingTimeout)
+		m.pair = nil
 	}
 
-	qrChan, err := m.client.GetQRChannel(ctx)
+	// O whatsmeow exige que GetQRChannel seja chamado antes de Connect().
+	if m.client.IsConnected() {
+		slog.Info("desconectando WebSocket antes de iniciar novo canal de QR")
+		m.client.Disconnect()
+	}
+
+	// O canal de QR precisa sobreviver além da requisição HTTP que o iniciou.
+	pairCtx, cancel := context.WithTimeout(context.Background(), pairCodeTTL+30*time.Second)
+	qrChan, err := m.client.GetQRChannel(pairCtx)
 	if err != nil {
+		cancel()
+		slog.Error("falha ao abrir canal de QR", "erro", err)
 		return fmt.Errorf("abrir canal de QR: %w", err)
 	}
 
-	state := &pairingState{done: make(chan struct{})}
+	state := &pairingState{
+		done:   make(chan struct{}),
+		cancel: cancel,
+	}
 	m.pair = state
+	slog.Info("iniciando sessão de pareamento")
 
 	go func() {
+		defer func() {
+			m.pairMu.Lock()
+			if m.pair == state {
+				m.pair = nil
+			}
+			m.pairMu.Unlock()
+		}()
+
 		for item := range qrChan {
 			switch item.Event {
 			case whatsmeow.QRChannelEventCode:
+				slog.Info("QR Code gerado", "tamanho", len(item.Code))
 				resp := contracts.QRCodeResponse{Event: "code", Code: item.Code}
 				expires := time.Now().Add(pairingTimeout)
 				resp.ExpiresAt = &expires
@@ -208,24 +255,29 @@ func (m *Manager) StartPairing(ctx context.Context) error {
 				}
 				state.set(resp)
 			case "success":
+				slog.Info("pareamento concluído com sucesso")
 				state.set(contracts.QRCodeResponse{Event: "success"})
 				state.finish(nil)
 				return
 			case "timeout":
+				slog.Warn("timeout do canal de QR")
 				state.set(contracts.QRCodeResponse{Event: "timeout"})
 				state.finish(ErrPairingTimeout)
 				return
 			default:
+				slog.Warn("canal de QR encerrado com evento", "evento", item.Event)
 				state.finish(fmt.Errorf("evento de QR: %s", item.Event))
 				return
 			}
 		}
+		slog.Warn("canal de QR encerrado sem confirmação")
 		state.finish(ErrPairingTimeout)
 	}()
 
 	if !m.client.IsConnected() {
 		go func() {
 			if err := m.client.Connect(); err != nil {
+				slog.Error("falha ao conectar para pareamento", "erro", err)
 				state.finish(fmt.Errorf("conectar para pareamento: %w", err))
 			}
 		}()
@@ -234,14 +286,22 @@ func (m *Manager) StartPairing(ctx context.Context) error {
 	return nil
 }
 
-// GetQR devolve o QR Code mais recente do processo de pareamento ativo.
-func (m *Manager) GetQR(_ context.Context) (*contracts.QRCodeResponse, error) {
+// GetQR devolve o QR Code mais recente do processo de pareamento ativo,
+// aguardando o primeiro código chegar durante o handshake inicial.
+func (m *Manager) GetQR(ctx context.Context) (*contracts.QRCodeResponse, error) {
 	m.pairMu.Lock()
 	state := m.pair
 	m.pairMu.Unlock()
 
 	if state == nil {
 		return nil, ErrPairingInactive
+	}
+
+	if err := m.waitForQRCode(ctx, state); err != nil {
+		if errors.Is(err, ErrPairingTimeout) {
+			return &contracts.QRCodeResponse{Event: "timeout"}, nil
+		}
+		return nil, err
 	}
 
 	resp, hasCode := state.snapshot()
@@ -253,45 +313,89 @@ func (m *Manager) GetQR(_ context.Context) (*contracts.QRCodeResponse, error) {
 
 // PairPhone solicita o código de 8 dígitos. O cliente precisa estar conectado
 // e o primeiro QR já deve ter chegado, conforme a documentação do upstream.
+// Se a primeira tentativa falhar (por exemplo, canal antigo expirando),
+// reinicia a conexão uma vez e tenta novamente.
 func (m *Manager) PairPhone(ctx context.Context, phone string) (*contracts.PairCodeResponse, error) {
+	slog.Info("solicitando código de pareamento por telefone", "phone", phone)
+
 	if m.client.Store.ID != nil && m.client.IsLoggedIn() {
 		return nil, ErrAlreadyPaired
 	}
-	if err := m.StartPairing(ctx); err != nil {
+
+	code, err := m.waitAndPairPhone(ctx, phone)
+	if err != nil && !errors.Is(err, ErrAlreadyPaired) && ctx.Err() == nil {
+		slog.Warn("primeira tentativa de PairPhone falhou; reiniciando conexão de pareamento",
+			"phone", phone,
+			"erro", err,
+		)
+		m.resetPairing(err)
+		code, err = m.waitAndPairPhone(ctx, phone)
+	}
+	if err != nil {
+		slog.Error("falha ao gerar código de pareamento", "phone", phone, "erro", err)
 		return nil, err
+	}
+
+	slog.Info("código de pareamento gerado com sucesso", "phone", phone)
+	return &contracts.PairCodeResponse{Code: code, ExpiresAt: time.Now().Add(pairCodeTTL)}, nil
+}
+
+func (m *Manager) waitAndPairPhone(ctx context.Context, phone string) (string, error) {
+	if err := m.StartPairing(ctx); err != nil {
+		return "", err
 	}
 
 	m.pairMu.Lock()
 	state := m.pair
 	m.pairMu.Unlock()
 
+	if state == nil {
+		return "", ErrPairingInactive
+	}
+	if err := m.waitForQRCode(ctx, state); err != nil {
+		return "", err
+	}
+
+	code, err := m.client.PairPhone(ctx, phone, true, whatsmeow.PairClientChrome, "Chrome (Linux)")
+	if err != nil {
+		return "", fmt.Errorf("gerar código de pareamento: %w", err)
+	}
+	return code, nil
+}
+
+func (m *Manager) waitForQRCode(ctx context.Context, state *pairingState) error {
 	deadline := time.NewTimer(pairingTimeout)
 	defer deadline.Stop()
 
 	for {
 		if _, hasCode := state.snapshot(); hasCode {
-			break
+			return nil
 		}
 		select {
 		case <-state.done:
 			if state.err != nil {
-				return nil, state.err
+				return state.err
 			}
-			return nil, errors.New("pareamento concluído antes de gerar o código")
+			return errors.New("pareamento concluído antes de gerar o código")
 		case <-deadline.C:
-			return nil, ErrPairingTimeout
+			return ErrPairingTimeout
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return ctx.Err()
 		case <-time.After(pairPollInterval):
 		}
 	}
+}
 
-	code, err := m.client.PairPhone(ctx, phone, true, whatsmeow.PairClientChrome, "Chrome (Linux)")
-	if err != nil {
-		return nil, fmt.Errorf("gerar código de pareamento: %w", err)
+func (m *Manager) resetPairing(cause error) {
+	m.pairMu.Lock()
+	if m.pair != nil {
+		m.pair.finish(cause)
+		m.pair = nil
 	}
-
-	return &contracts.PairCodeResponse{Code: code, ExpiresAt: time.Now().Add(pairCodeTTL)}, nil
+	m.pairMu.Unlock()
+	if m.client.IsConnected() {
+		m.client.Disconnect()
+	}
 }
 
 // Reconnect derruba e restabelece o WebSocket sem deslogar.

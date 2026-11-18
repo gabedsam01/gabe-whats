@@ -183,3 +183,62 @@ func (m *Manager) SendPresence(ctx context.Context, req contracts.PresenceReques
 		Detail: fmt.Sprintf("presença %q publicada em %s", req.State, chat.String()),
 	}, nil
 }
+
+// CheckNumbers verifica quais números possuem conta ativa no WhatsApp.
+func (m *Manager) CheckNumbers(ctx context.Context, req contracts.CheckNumbersRequest) (*contracts.CheckNumbersResponse, error) {
+	if len(req.Phones) == 0 {
+		return nil, invalidInput(errors.New("phones vazio"))
+	}
+
+	formatted := make([]string, len(req.Phones))
+	for i, raw := range req.Phones {
+		value := strings.TrimSpace(raw)
+		if strings.Contains(value, "@") {
+			if jid, err := types.ParseJID(value); err == nil && jid.User != "" {
+				value = jid.User
+			}
+		}
+		digits := onlyDigits(value)
+		if len(digits) < 10 || len(digits) > 15 {
+			return nil, invalidInput(fmt.Errorf("número inválido %q: use DDI + número (10 a 15 dígitos)", raw))
+		}
+		formatted[i] = "+" + digits
+	}
+
+	items, err := m.client.IsOnWhatsApp(ctx, formatted)
+	if err != nil {
+		return nil, fmt.Errorf("verificar números no WhatsApp: %w", err)
+	}
+
+	byQuery := make(map[string]types.IsOnWhatsAppResponse, len(items))
+	for _, item := range items {
+		if item.Query != "" {
+			byQuery[item.Query] = item
+		}
+	}
+
+	results := make([]contracts.NumberCheckResult, len(req.Phones))
+	for i, raw := range req.Phones {
+		item, ok := byQuery[formatted[i]]
+		if !ok && i < len(items) {
+			item = items[i]
+		}
+		res := contracts.NumberCheckResult{
+			Query:        raw,
+			IsRegistered: item.IsIn,
+		}
+		if item.IsIn && !item.JID.IsEmpty() {
+			res.JID = item.JID.String()
+		}
+		if !item.PhoneNumber.IsEmpty() {
+			res.PhoneNumber = item.PhoneNumber.User
+		} else if item.IsIn && !item.JID.IsEmpty() {
+			res.PhoneNumber = item.JID.User
+		}
+		if item.VerifiedName != nil && item.VerifiedName.Details != nil {
+			res.VerifiedName = item.VerifiedName.Details.GetVerifiedName()
+		}
+		results[i] = res
+	}
+	return &contracts.CheckNumbersResponse{Results: results}, nil
+}

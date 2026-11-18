@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -27,8 +28,20 @@ func (e *problemError) GetStatus() int { return e.status }
 // a interface huma.ContentTypeFilter.
 func (e *problemError) ContentType(string) string { return contentTypeProblem }
 
+// logProblem registra falhas da API no log estruturado para diagnóstico.
+func logProblem(status int, code, detail string) {
+	if status >= http.StatusInternalServerError {
+		slog.Error("falha HTTP API", "status", status, "code", code, "detail", detail)
+		return
+	}
+	if status >= http.StatusBadRequest {
+		slog.Warn("erro HTTP API", "status", status, "code", code, "detail", detail)
+	}
+}
+
 // newProblem monta um problema com código estável e detalhes opcionais.
 func newProblem(status int, code, detail string, fields ...contracts.ProblemField) *problemError {
+	logProblem(status, code, detail)
 	return &problemError{
 		status: status,
 		Problem: contracts.Problem{
@@ -116,6 +129,7 @@ func codeForStatus(status int) string {
 // writeProblem escreve um Problem diretamente no ResponseWriter. Usado por
 // middlewares, que ficam fora do pipeline de serialização do Huma.
 func writeProblem(w http.ResponseWriter, status int, code, detail string, fields ...contracts.ProblemField) {
+	logProblem(status, code, detail)
 	body := contracts.Problem{
 		Type:   "about:blank",
 		Title:  http.StatusText(status),

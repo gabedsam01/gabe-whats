@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -71,8 +72,15 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	}
 	request.Header.Set("Accept", "application/json")
 
+	start := time.Now()
 	response, err := c.http.Do(request)
 	if err != nil {
+		slog.Error("falha de conexão com a API REST",
+			"method", method,
+			"path", path,
+			"duracao_ms", time.Since(start).Milliseconds(),
+			"erro", err,
+		)
 		return fmt.Errorf("chamar a API: %w", err)
 	}
 	defer func() { _ = response.Body.Close() }()
@@ -92,8 +100,23 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 				apiErr.Detail = problem.Detail
 			}
 		}
+		slog.Warn("API REST retornou erro",
+			"method", method,
+			"path", path,
+			"status", apiErr.Status,
+			"code", apiErr.Code,
+			"detail", apiErr.Detail,
+			"duracao_ms", time.Since(start).Milliseconds(),
+		)
 		return apiErr
 	}
+
+	slog.Info("chamada à API REST concluída",
+		"method", method,
+		"path", path,
+		"status", response.StatusCode,
+		"duracao_ms", time.Since(start).Milliseconds(),
+	)
 
 	if out == nil || len(payload) == 0 {
 		return nil

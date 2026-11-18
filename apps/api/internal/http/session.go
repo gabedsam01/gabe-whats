@@ -163,3 +163,33 @@ func normalizePhone(raw string) string {
 	}
 	return b.String()
 }
+
+// registerContacts publica os endpoints de consulta de contatos no WhatsApp.
+func (s *Server) registerContacts() {
+	type input struct {
+		Body *contracts.CheckNumbersRequest
+	}
+	type output struct {
+		Body *contracts.CheckNumbersResponse
+	}
+
+	huma.Register(s.api, huma.Operation{
+		Method:      http.MethodPost,
+		Path:        "/api/v1/contacts/check",
+		OperationID: "checkNumbers",
+		Summary:     "Verifica se números estão no WhatsApp",
+		Tags:        []string{"Contacts"},
+	}, func(ctx context.Context, in *input) (*output, error) {
+		if in.Body == nil {
+			return nil, newProblem(http.StatusUnprocessableEntity, "validation_failed", "corpo da requisição ausente")
+		}
+		if s.deps.WhatsApp == nil {
+			return nil, newProblem(http.StatusServiceUnavailable, "whatsapp_unavailable", "cliente do WhatsApp não inicializado")
+		}
+		resp, err := s.deps.WhatsApp.CheckNumbers(ctx, *in.Body)
+		if err != nil {
+			return nil, sendError(err)
+		}
+		return &output{Body: resp}, nil
+	})
+}

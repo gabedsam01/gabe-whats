@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
@@ -66,6 +67,7 @@ func New(cfg *config.Config, deps Deps) *Server {
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID)
 	router.Use(middleware.RealIP)
+	router.Use(s.requestLogger)
 	router.Use(s.recoverer)
 	router.Use(s.authenticate)
 
@@ -86,6 +88,7 @@ func New(cfg *config.Config, deps Deps) *Server {
 
 	s.registerHealth()
 	s.registerSession()
+	s.registerContacts()
 	s.registerMessages()
 	s.registerMessageActions()
 	s.registerGroups()
@@ -179,6 +182,39 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 			return
 		}
 		next.ServeHTTP(w, r)
+	})
+}
+
+// requestLogger registra cada chamada HTTP com método, path, status e duração.
+// Chamadas saudáveis de /health ficam em Debug para não poluir os logs.
+func (s *Server) requestLogger(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+		next.ServeHTTP(ww, r)
+
+		status := ww.Status()
+		if status == 0 {
+			status = http.StatusOK
+		}
+		attrs := []any{
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", status,
+			"duracao_ms", time.Since(start).Milliseconds(),
+			"request_id", middleware.GetReqID(r.Context()),
+			"remote_addr", r.RemoteAddr,
+		}
+		switch {
+		case r.URL.Path == "/health" && status == http.StatusOK:
+			slog.Debug("requisição HTTP", attrs...)
+		case status >= http.StatusInternalServerError:
+			slog.Error("requisição HTTP", attrs...)
+		case status >= http.StatusBadRequest:
+			slog.Warn("requisição HTTP", attrs...)
+		default:
+			slog.Info("requisição HTTP", attrs...)
+		}
 	})
 }
 

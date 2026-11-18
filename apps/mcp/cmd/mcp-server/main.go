@@ -141,7 +141,68 @@ func newHTTPHandler(transport, authToken string, newServer func() *mcp.Server) (
 	mux.Handle("/mcp/", protected)
 	mux.Handle("/sse", protected)
 	mux.Handle("/", protected)
-	return mux, nil
+	return logHTTPRequests(mux), nil
+}
+
+// statusRecorder captura o código de status HTTP preservando Flush/Unwrap para SSE e Streamable HTTP.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+func (r *statusRecorder) Write(p []byte) (int, error) {
+	if r.status == 0 {
+		r.status = http.StatusOK
+	}
+	return r.ResponseWriter.Write(p)
+}
+
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (r *statusRecorder) Unwrap() http.ResponseWriter {
+	return r.ResponseWriter
+}
+
+// logHTTPRequests registra chamadas recebidas no servidor HTTP do MCP.
+// Chamadas saudáveis de /health ficam em Debug para não poluir os logs do container.
+func logHTTPRequests(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w}
+		next.ServeHTTP(rec, r)
+
+		status := rec.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		attrs := []any{
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", status,
+			"duracao_ms", time.Since(start).Milliseconds(),
+			"remote_addr", r.RemoteAddr,
+			"mcp_session_id", r.Header.Get("Mcp-Session-Id"),
+		}
+		switch {
+		case r.URL.Path == "/health" && status == http.StatusOK:
+			slog.Debug("requisição MCP HTTP", attrs...)
+		case status >= http.StatusInternalServerError:
+			slog.Error("requisição MCP HTTP", attrs...)
+		case status >= http.StatusBadRequest:
+			slog.Warn("requisição MCP HTTP", attrs...)
+		default:
+			slog.Info("requisição MCP HTTP", attrs...)
+		}
+	})
 }
 
 // serveHTTP inicia o servidor HTTP do MCP e trata desligamento gracioso.
@@ -178,6 +239,12 @@ func requireBearerAuth(token string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got := extractAuthToken(r)
 		if subtle.ConstantTimeCompare([]byte(got), expected) != 1 {
+			slog.Warn("autenticação MCP recusada",
+				"method", r.Method,
+				"path", r.URL.Path,
+				"remote_addr", r.RemoteAddr,
+				"token_presente", got != "",
+			)
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			w.WriteHeader(http.StatusUnauthorized)
