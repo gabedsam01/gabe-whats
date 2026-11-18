@@ -136,20 +136,37 @@ Veja o modelo pronto em [`mcp-config.example.json`](file:///home/gabedsam01/meus
 }
 ```
 
+### Conector Remoto Streamable HTTP (ex.: `agentes.chat` atrás de Caddy/Nexus)
+
+Quando exposto atrás de proxy reverso HTTPS (ex.: Caddy no `nexus`), suba o servidor MCP com `--transport http`:
+
+```bash
+gabe-whats-mcp --transport http --http-addr 0.0.0.0:8090
+```
+
+- **Endpoint MCP:** `https://whats.<seu-dominio>/mcp`
+- **Header obrigatório:** `Authorization: Bearer <GABE_WHATS_MCP_TOKEN>` (ou `GABE_WHATS_API_KEY` caso `GABE_WHATS_MCP_TOKEN` não esteja definido)
+- **Healthcheck público (sem token):** `GET /health`
+
+No `agentes.chat`, vá em **Conectores › Personalizado**, informe a URL `https://whats.<seu-dominio>/mcp` e adicione o header `Authorization: Bearer <token>`.
+
 ### Guardrails Recomendados para Uso Pessoal com Agentes
 - **`WEBHOOK_ALLOW_JIDS` / `WEBHOOK_IGNORE_FROM_ME`:** Evita que o agente responda a desconhecidos ou entre em loop infinito respondendo às próprias mensagens.
 - **Modo "Self-Chat" opcional:** Permite conversar com o seu agente enviando mensagens no chat com o seu próprio número ou em um grupo privado dedicado.
   - **Atenção (decisão do projeto):** com `GABE_WHATS_WEBHOOK_IGNORE_FROM_ME=true` (padrão), **o Modo Self-Chat não recebe eventos**, porque no chat consigo mesmo toda mensagem é `is_from_me=true`. Para usar self-chat é preciso desligar o filtro e aceitar o risco de loop — a mitigação recomendada é responder apenas a comandos com prefixo (ex.: `/agente ...`) no handler do agente.
-## 13. Estado da Implementação (S5 concluído)
+## 13. Estado da Implementação (S5 concluído + Streamable HTTP)
 
 O servidor MCP está implementado em `apps/mcp` sobre a SDK oficial
-`github.com/modelcontextprotocol/go-sdk` v1.8.0, com dois transportes:
+`github.com/modelcontextprotocol/go-sdk` v1.8.0, com três transportes:
 
 ```bash
 # stdio (o cliente MCP sobe o processo)
 go run ./apps/mcp/cmd/mcp-server --transport stdio
 
-# SSE (servidor HTTP para clientes remotos)
+# Streamable HTTP (recomendado para conectores remotos como agentes.chat)
+go run ./apps/mcp/cmd/mcp-server --transport http --http-addr 127.0.0.1:8090
+
+# SSE (transporte HTTP legado)
 go run ./apps/mcp/cmd/mcp-server --transport sse --sse-addr 127.0.0.1:8090
 ```
 

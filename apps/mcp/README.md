@@ -18,12 +18,15 @@ Transportes:
 | Flag | Uso |
 | :--- | :--- |
 | `--transport stdio` | Padrão. O cliente MCP sobe o processo e conversa por stdin/stdout. |
-| `--transport sse` | Sobe um servidor HTTP SSE em `--sse-addr` (padrão `127.0.0.1:8090`). |
+| `--transport http` | Sobe um servidor **Streamable HTTP** (`/mcp`, com `/health` público) em `--http-addr` (fallback `--sse-addr`, padrão `127.0.0.1:8090`) exigindo `Authorization: Bearer <token>`. |
+| `--transport sse` | Sobe um servidor HTTP SSE legado em `--sse-addr` (padrão `127.0.0.1:8090`) também protegido por Bearer token. |
 
-Configuração por ambiente (sem variáveis para o transporte — ele é sempre flag):
+Configuração por ambiente (flags da CLI têm precedência sobre o ambiente):
 
 - `GABE_WHATS_API_URL` — URL da API (ex.: `http://127.0.0.1:8080`);
-- `GABE_WHATS_API_KEY` — **obrigatória**; a mesma chave do `.env` da API.
+- `GABE_WHATS_API_KEY` — **obrigatória**; a mesma chave do `.env` da API;
+- `GABE_WHATS_MCP_TOKEN` — token exigido em `Authorization: Bearer <token>` no modo `http` ou `sse` (quando vazio, usa `GABE_WHATS_API_KEY`);
+- `GABE_WHATS_MCP_TRANSPORT` / `GABE_WHATS_MCP_ADDR` — padrões opcionais para `--transport` e endereço HTTP.
 
 Exemplo de configuração de cliente em [`mcp-config.example.json`](mcp-config.example.json).
 
@@ -53,7 +56,7 @@ Exemplo de configuração de cliente em [`mcp-config.example.json`](mcp-config.e
 
 | Arquivo | Responsabilidade |
 | :--- | :--- |
-| [`cmd/mcp-server/main.go`](cmd/mcp-server/main.go) | Flags, transporte (`stdio`/`SSE`) e ciclo de vida |
+| [`cmd/mcp-server/main.go`](cmd/mcp-server/main.go) | Flags, transporte (`stdio`/`http`/`sse`), auth Bearer e ciclo de vida |
 | [`internal/apiclient/client.go`](internal/apiclient/client.go) | Cliente HTTP tipado nos contratos de `shared/contracts` |
 | [`internal/tools/tools.go`](internal/tools/tools.go) | Registro das 22 tools |
 | [`internal/resources/resources.go`](internal/resources/resources.go) | Registro dos 3 resources de leitura |
